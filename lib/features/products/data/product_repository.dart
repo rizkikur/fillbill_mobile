@@ -1,4 +1,5 @@
 import '../../../core/config/app_config.dart';
+import '../../../core/errors/app_exception.dart';
 import '../../wallet/data/mock_wallet_store.dart';
 import '../domain/product_entity.dart';
 import 'product_remote_data_source.dart';
@@ -116,6 +117,21 @@ class ProductRepository {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Melakukan inquiry ke upstream biller / supplier dan meneruskan AppException bila gagal.
+  Future<Map<String, dynamic>> inquireProduct({
+    required String skuCode,
+    required String customerNumber,
+  }) async {
+    final res = await _remoteSource.inquirePostpaid(
+      skuCode: skuCode,
+      customerNumber: customerNumber,
+    );
+    if (res.data == null) {
+      throw AppException(message: res.message ?? 'Data inquiry tidak ditemukan');
+    }
+    return res.data!;
   }
 
   List<ProductEntity> _generateMockDataPackages(String operatorName) {

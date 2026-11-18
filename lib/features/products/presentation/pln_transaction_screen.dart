@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/mockup_provider.dart';
+import '../../../core/errors/app_exception.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/currency_formatter.dart';
@@ -87,8 +88,14 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     super.dispose();
   }
 
-  void _showConfirmationSheet(Map<String, dynamic> token, String meterNo) {
-    final cleanPrice = CurrencyFormatter.clean(token['priceDisplay']);
+  void _showConfirmationSheet({
+    required Map<String, dynamic> token,
+    required String meterNo,
+    required String customerName,
+    required String tariffPower,
+    int? inquiryId,
+  }) {
+    final cleanPrice = CurrencyFormatter.clean(token['priceDisplay'] ?? 'Rp ${token['price']}');
 
     CustomBottomSheet.show(
       context: context,
@@ -98,8 +105,8 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
         children: [
           _buildRow('Layanan', 'PLN Prabayar (Token)'),
           _buildRow('No. Meter / IDPEL', meterNo),
-          _buildRow('Nama Pelanggan', ref.read(mockupModeProvider) ? 'MAHAYANA GARBILEKA' : 'PELANGGAN PLN / $meterNo'),
-          _buildRow('Tarif / Daya', ref.read(mockupModeProvider) ? 'R1 / 2200 VA' : 'PRABAYAR / $meterNo'),
+          _buildRow('Nama Pelanggan', customerName),
+          _buildRow('Tarif / Daya', tariffPower),
           const SizedBox(height: 14),
           const Divider(height: 1, color: AppColors.borderLight),
           const SizedBox(height: 16),
@@ -140,14 +147,15 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
               if (pin != null && pin.length == 6) {
                 if (!context.mounted) return;
 
+                final priceInt = (token['price'] as int? ?? 0);
                 final tempTx = TransactionEntity(
                   id: 0,
                   skuCode: token['sku'],
-                  productName: 'Token PLN ${CurrencyFormatter.clean(token['label'])}',
+                  productName: token['name'] ?? 'Token PLN ${token['sku']}',
                   customerNumber: meterNo,
-                  amountCents: token['amount'] as int? ?? 0,
+                  amountCents: priceInt * 100,
                   amountDisplay: cleanPrice,
-                  sellPriceCents: token['amount'] as int? ?? 0,
+                  sellPriceCents: priceInt * 100,
                   sellPriceDisplay: cleanPrice,
                   status: 'pending',
                   providerRef: null,
@@ -159,6 +167,7 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                   extra: ReceiptArgs(
                     transaction: tempTx,
                     pinToExecute: pin,
+                    inquiryId: inquiryId,
                   ),
                 );
               }
@@ -167,6 +176,69 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _onTokenTap(Map<String, dynamic> token, String meterNo) async {
+    setState(() => _selectedToken = token);
+
+    if (meterNo.length < 11) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Harap masukkan 11-12 digit No. Meter')),
+      );
+      return;
+    }
+
+    final isMockup = ref.read(mockupModeProvider);
+    if (isMockup) {
+      // Auto Mockup aktif -> langsung buka konfirmasi sheet dengan mockup data
+      _showConfirmationSheet(
+        token: token,
+        meterNo: meterNo,
+        customerName: 'MAHAYANA GARBILEKA',
+        tariffPower: 'R1 / 2200 VA',
+        inquiryId: 999,
+      );
+      return;
+    }
+
+    // Live Prod Mode -> Wajib inquiry ke Backend (BE inq ke supplier M-Link)
+    setState(() => _isInquiring = true);
+
+    try {
+      final repo = ref.read(productRepositoryProvider);
+      final result = await repo.inquireProduct(
+        skuCode: token['sku'],
+        customerNumber: meterNo,
+      );
+
+      if (!mounted) return;
+      setState(() => _isInquiring = false);
+
+      final custName = result['customer_name'] as String? ?? 'PELANGGAN PLN / $meterNo';
+      final tariff = result['tariff_power'] as String? ?? 'R1 / 2200 VA';
+      final inquiryId = result['id'] as int?;
+
+      _showConfirmationSheet(
+        token: token,
+        meterNo: meterNo,
+        customerName: custName,
+        tariffPower: tariff,
+        inquiryId: inquiryId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isInquiring = false);
+
+      final msg = e is AppException ? e.message : 'Gagal melakukan inquiry ke biller PLN: $e';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          backgroundColor: AppColors.error,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      // Popup konfirmasi TIDAK dipanggil bila inquiry gagal!
+    }
   }
 
   void _inquirePostpaidBill(String idpel) async {
@@ -178,33 +250,12 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     }
 
     setState(() => _isInquiring = true);
-    final repo = ref.read(productRepositoryProvider);
-    final result = await repo.inquirePostpaid(
-      skuCode: 'PLNPOST',
-      customerNumber: idpel,
-    );
-
-    if (!mounted) return;
-    setState(() => _isInquiring = false);
-
-    if (result != null) {
+    final isMockup = ref.read(mockupModeProvider);
+    if (isMockup) {
       setState(() {
+        _isInquiring = false;
         _inquiryResult = {
-          'id': result['id'],
-          'idpel': idpel,
-          'name': result['customer_name'] ?? 'PELANGGAN PLN / $idpel',
-          'tarif': result['raw']?['tariff_power'] ?? 'R1 / 1300 VA',
-          'periode': result['raw']?['bill_period'] ?? 'Bulan Berjalan',
-          'standMeter': result['raw']?['stand_meter'] ?? '012345 - 012567',
-          'tagihan': result['amount_display'] ?? 'Rp 250.000',
-          'admin': result['admin_fee_display'] ?? 'Rp 2.500',
-          'total': CurrencyFormatter.clean(result['amount_display'] ?? 'Rp 252.500'),
-        };
-      });
-    } else if (ref.read(mockupModeProvider)) {
-      // Fallback simulasi mockup mode
-      setState(() {
-        _inquiryResult = {
+          'id': 999,
           'idpel': idpel,
           'name': 'MAHAYANA GARBILEKA',
           'tarif': 'R1 / 2200 VA',
@@ -215,10 +266,38 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
           'total': 'Rp 248.300',
         };
       });
-    } else {
+      return;
+    }
+
+    try {
+      final repo = ref.read(productRepositoryProvider);
+      final result = await repo.inquireProduct(
+        skuCode: 'PLNPOST',
+        customerNumber: idpel,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _isInquiring = false;
+        _inquiryResult = {
+          'id': result['id'],
+          'idpel': idpel,
+          'name': result['customer_name'] ?? 'PELANGGAN PLN / $idpel',
+          'tarif': result['tariff_power'] ?? result['raw']?['data']?['daya'] ?? 'R1 / 1300 VA',
+          'periode': result['raw']?['bill_period'] ?? 'Bulan Berjalan',
+          'standMeter': result['raw']?['stand_meter'] ?? '-',
+          'tagihan': result['amount_display'] ?? 'Rp 250.000',
+          'admin': result['admin_fee_display'] ?? 'Rp 2.500',
+          'total': CurrencyFormatter.clean(result['amount_display'] ?? 'Rp 252.500'),
+        };
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isInquiring = false);
+      final msg = e is AppException ? e.message : 'Tagihan tidak ditemukan atau gangguan koneksi.';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Tagihan tidak ditemukan atau sudah lunas.'),
+        SnackBar(
+          content: Text(msg),
           backgroundColor: AppColors.error,
         ),
       );
@@ -442,17 +521,11 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                   itemBuilder: (context, index) {
                     final token = _plnTokens[index];
                     final isSelected = _selectedToken == token;
+                    final isProcessingThis = _isInquiring && isSelected;
                     return InkWell(
-                      onTap: () {
-                        setState(() => _selectedToken = token);
-                        if (_meterController.text.trim().length >= 11) {
-                          _showConfirmationSheet(token, _meterController.text.trim());
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Harap masukkan 11-12 digit No. Meter')),
-                          );
-                        }
-                      },
+                      onTap: _isInquiring
+                          ? null
+                          : () => _onTokenTap(token, _meterController.text.trim()),
                       borderRadius: BorderRadius.circular(14),
                       child: Container(
                         padding: const EdgeInsets.all(12),
@@ -464,18 +537,29 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                             width: isSelected ? 2 : 1,
                           ),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(token['name'], style: AppTypography.titleSmall),
-                            const SizedBox(height: 4),
-                            Text(
-                              token['priceDisplay'],
-                              style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
-                            ),
-                          ],
-                        ),
+                        child: isProcessingThis
+                            ? Center(
+                                child: SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
+                                  ),
+                                ),
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(token['name'], style: AppTypography.titleSmall),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    token['priceDisplay'],
+                                    style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
+                                  ),
+                                ],
+                              ),
                       ),
                     );
                   },
