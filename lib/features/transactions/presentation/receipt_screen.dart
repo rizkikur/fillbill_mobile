@@ -341,26 +341,24 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> with SingleTicker
                     _showBluetoothPrinterDialog(context);
                   },
                 ),
-              ] else if (_isProcessing && _currentTx.id > 0) ...[
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => context.go('/home'),
+                  child: Text(
+                    'Kembali ke Beranda',
+                    style: AppTypography.labelLarge.copyWith(color: AppColors.textSecondary),
+                  ),
+                ),
+              ] else ...[
+                // Transaksi Sedang Diproses / Gagal:
+                // Tidak ada tombol redundan "Cek Status" (otomatis polling background & pull-to-refresh)
                 CustomButton(
-                  text: 'Cek Status Sekarang',
-                  icon: Icons.refresh_rounded,
-                  isLoading: _isManualRefreshing,
+                  text: 'Kembali ke Beranda',
+                  icon: Icons.home_rounded,
                   backgroundColor: AppColors.primaryNavy,
-                  onPressed: _refreshStatusManually,
+                  onPressed: () => context.go('/home'),
                 ),
               ],
-
-              const SizedBox(height: 12),
-
-              // Tombol Kembali ke Beranda
-              TextButton(
-                onPressed: () => context.go('/home'),
-                child: Text(
-                  'Kembali ke Beranda',
-                  style: AppTypography.labelLarge.copyWith(color: AppColors.textSecondary),
-                ),
-              ),
             ],
           ),
         ),

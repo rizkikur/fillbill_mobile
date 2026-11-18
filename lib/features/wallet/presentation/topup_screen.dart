@@ -11,6 +11,7 @@ import '../../products/presentation/product_notifier.dart';
 import '../data/mock_wallet_store.dart';
 import '../data/wallet_repository.dart';
 import '../domain/wallet_entity.dart';
+import 'snap_webview_screen.dart';
 import 'wallet_notifier.dart';
 import 'widgets/payment_simulation_sheet.dart';
 
@@ -846,8 +847,27 @@ class _TopupScreenState extends ConsumerState<TopupScreen> {
       final topupResult = await ref.read(walletNotifierProvider.notifier).proceedTopup();
       if (topupResult != null && context.mounted) {
         if (topupResult.paymentUrl.isNotEmpty) {
-          await ref.read(homeNotifierProvider.notifier).fetchDashboard();
-          await ref.read(walletNotifierProvider.notifier).fetchMutations();
+          final isSuccess = await Navigator.of(context).push<bool>(
+            MaterialPageRoute(
+              builder: (context) => SnapWebviewScreen(paymentUrl: topupResult.paymentUrl),
+            ),
+          );
+
+          if (isSuccess == true && mounted) {
+            await ref.read(homeNotifierProvider.notifier).fetchDashboard();
+            await ref.read(walletNotifierProvider.notifier).fetchMutations();
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: AppColors.accentEmeraldDark,
+                behavior: SnackBarBehavior.floating,
+                content: const Text('Pembayaran berhasil! Saldo dompet Anda telah bertambah.'),
+              ),
+            );
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            }
+          }
         }
       }
     }

@@ -67,12 +67,14 @@ class TransactionRepository {
     return res.data!;
   }
 
-  /// Polling Tangga Berjenjang (2s ➜ 5s ➜ 10s ➜ 15s)
+  /// Polling Tangga Berjenjang (2s ➜ 3s ➜ 5s ➜ 8s ➜ 12s ➜ 15s)
   Stream<TransactionEntity> pollTransactionStatus(int transactionId) async* {
     final intervals = [
       const Duration(seconds: 2),
+      const Duration(seconds: 3),
       const Duration(seconds: 5),
-      const Duration(seconds: 10),
+      const Duration(seconds: 8),
+      const Duration(seconds: 12),
       const Duration(seconds: 15),
     ];
 
