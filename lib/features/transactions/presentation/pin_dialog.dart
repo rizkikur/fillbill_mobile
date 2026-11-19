@@ -41,20 +41,22 @@ class _PinDialogState extends ConsumerState<PinDialog> {
   }
 
   Future<void> _checkBiometrics() async {
-    final storage = ref.read(secureStorageProvider);
-    final biometric = ref.read(biometricServiceProvider);
+    try {
+      final storage = ref.read(secureStorageProvider);
+      final biometric = ref.read(biometricServiceProvider);
 
-    final isEnabled = await storage.isBiometricEnabled();
-    final isSupported = await biometric.isDeviceSupported();
-    final savedPin = await storage.getEncryptedPin();
+      final isEnabled = await storage.isBiometricEnabled();
+      final isSupported = await biometric.isDeviceSupported();
+      final savedPin = await storage.getEncryptedPin();
 
-    if (mounted && isEnabled && isSupported && savedPin != null) {
-      setState(() {
-        _isBiometricAvailable = true;
-      });
-      // Berikan opsi otomatis prompt biometrik
-      _handleBiometricAuth();
-    }
+      if (mounted && isEnabled && isSupported && savedPin != null) {
+        setState(() {
+          _isBiometricAvailable = true;
+        });
+        // Berikan opsi otomatis prompt biometrik
+        _handleBiometricAuth();
+      }
+    } catch (_) {}
   }
 
   Future<void> _handleBiometricAuth() async {

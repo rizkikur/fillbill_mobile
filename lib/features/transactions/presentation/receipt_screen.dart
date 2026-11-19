@@ -68,11 +68,15 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> with SingleTicker
     );
 
     // Jika dipanggil dengan PIN, eksekusi pembayaran di background struk (Zero-Wait Transition)
-    if (widget.pinToExecute != null && widget.pinToExecute!.isNotEmpty) {
-      _executeInitialPayment(widget.pinToExecute!, widget.inquiryId);
-    } else if (_isProcessing && _currentTx.id > 0) {
-      _startBackgroundPolling();
-    }
+    // Gunakan addPostFrameCallback agar tidak memodifikasi Riverpod provider saat widget tree sedang build (initState)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.pinToExecute != null && widget.pinToExecute!.isNotEmpty) {
+        _executeInitialPayment(widget.pinToExecute!, widget.inquiryId);
+      } else if (_isProcessing && _currentTx.id > 0) {
+        _startBackgroundPolling();
+      }
+    });
   }
 
   @override
@@ -168,10 +172,13 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> with SingleTicker
   }
 
   void _triggerSuccessRefresh() {
-    // Refresh saldo dompet dan riwayat mutasi
-    ref.read(homeNotifierProvider.notifier).fetchDashboard();
-    ref.read(walletNotifierProvider.notifier).fetchMutations();
-    ref.read(transactionHistoryProvider.notifier).fetchHistory();
+    // Refresh saldo dompet dan riwayat mutasi setelah frame selesai
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(homeNotifierProvider.notifier).fetchDashboard();
+      ref.read(walletNotifierProvider.notifier).fetchMutations();
+      ref.read(transactionHistoryProvider.notifier).fetchHistory();
+    });
   }
 
   @override
