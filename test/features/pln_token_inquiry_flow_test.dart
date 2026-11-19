@@ -136,7 +136,7 @@ void main() {
   });
 
   group('PLN Token Inquiry Flow Verification', () {
-    testWidgets('Live mode: failed inquiry shows SnackBar error and blocks confirmation sheet', (tester) async {
+    testWidgets('Live mode: failed inquiry shows prominent error card and prevents payment', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -157,21 +157,27 @@ void main() {
       await tester.enterText(textFieldFinder, '12000000000');
       await tester.pumpAndSettle();
 
-      // Tap token chip (e.g. PLN Token Rp 20.000)
-      final tokenChipFinder = find.text('PLN Token Rp 20.000');
-      expect(tokenChipFinder, findsOneWidget);
-      await tester.tap(tokenChipFinder);
+      // Tap 'Cek ID Pelanggan'
+      final checkBtn = find.text('Cek ID Pelanggan');
+      expect(checkBtn, findsOneWidget);
+      await tester.tap(checkBtn);
       await tester.pumpAndSettle();
 
-      // Must show error SnackBar
+      // Must show error card
       expect(find.textContaining('Nomor tidak ditemukan'), findsOneWidget);
+      expect(find.text('Inquiry Pelanggan Gagal'), findsOneWidget);
 
-      // Must NOT show confirmation sheet
-      expect(find.text('Konfirmasi Pembelian Token PLN'), findsNothing);
+      // Must NOT show verified card or Bayar button
+      expect(find.text('Data Pelanggan PLN'), findsNothing);
       expect(find.text('Bayar Sekarang'), findsNothing);
     });
 
-    testWidgets('Live mode: successful inquiry retrieves real subscriber name and opens confirmation sheet', (tester) async {
+    testWidgets('Live mode: successful inquiry retrieves real subscriber name and unlocks nominal tokens', (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -191,19 +197,32 @@ void main() {
       await tester.enterText(textFieldFinder, '12000000001');
       await tester.pumpAndSettle();
 
-      // Tap token chip
+      // Tap 'Cek ID Pelanggan'
+      final checkBtn = find.text('Cek ID Pelanggan');
+      await tester.tap(checkBtn);
+      await tester.pumpAndSettle();
+
+      // Verified customer card should be visible with real subscriber name & tariff
+      expect(find.text('Data Pelanggan PLN'), findsOneWidget);
+      expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
+      expect(find.text('R1 / 2200 VA'), findsOneWidget);
+
+      // Nominal tokens are unlocked
       final tokenChipFinder = find.text('PLN Token Rp 20.000');
+      expect(tokenChipFinder, findsOneWidget);
       await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
-      // Confirmation sheet should be visible with real subscriber name & tariff
-      expect(find.text('Konfirmasi Pembelian Token PLN'), findsOneWidget);
-      expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
-      expect(find.text('R1 / 2200 VA'), findsOneWidget);
+      // Checkout bar appears with 'Bayar Sekarang'
       expect(find.text('Bayar Sekarang'), findsOneWidget);
     });
 
-    testWidgets('Mockup mode ON: offline network error triggers fallback sheet for valid meter', (tester) async {
+    testWidgets('Mockup mode ON: offline network error triggers fallback subscriber card for valid meter', (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       AppConfig.setMockupEnabled(true);
 
       await tester.pumpWidget(
@@ -220,14 +239,17 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // In mockup mode, meter controller is prefilled with 12000000001
+      // In mockup mode, meter controller is prefilled with 12000000001 and pre-inquired
+      expect(find.text('Data Pelanggan PLN'), findsOneWidget);
+      expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
+
+      // Tap nominal
       final tokenChipFinder = find.text('PLN Token Rp 20.000');
+      expect(tokenChipFinder, findsOneWidget);
       await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
-      // Sheet should open directly with mockup name
-      expect(find.text('Konfirmasi Pembelian Token PLN'), findsOneWidget);
-      expect(find.text('MAHAYANA GARBILEKA'), findsOneWidget);
+      expect(find.text('Bayar Sekarang'), findsOneWidget);
     });
 
     testWidgets('Mockup mode ON: invalid meter 12000000000 is rejected even when offline', (tester) async {
@@ -252,14 +274,15 @@ void main() {
       await tester.enterText(textFieldFinder, '12000000000');
       await tester.pumpAndSettle();
 
-      // Tap token chip
-      final tokenChipFinder = find.text('PLN Token Rp 20.000');
-      await tester.tap(tokenChipFinder);
+      // Tap 'Cek ID Pelanggan'
+      final checkBtn = find.text('Cek ID Pelanggan');
+      await tester.tap(checkBtn);
       await tester.pumpAndSettle();
 
-      // Must show error SnackBar and NOT open confirmation sheet
+      // Must show error card and NOT allow payment
       expect(find.textContaining('Nomor tidak ditemukan'), findsOneWidget);
-      expect(find.text('Konfirmasi Pembelian Token PLN'), findsNothing);
+      expect(find.text('Inquiry Pelanggan Gagal'), findsOneWidget);
+      expect(find.text('Bayar Sekarang'), findsNothing);
     });
   });
 }

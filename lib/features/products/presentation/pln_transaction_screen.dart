@@ -7,7 +7,6 @@ import '../../../core/errors/app_exception.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/currency_formatter.dart';
-import '../../../core/widgets/custom_bottom_sheet.dart';
 import '../../../core/widgets/custom_button.dart';
 import '../../../core/widgets/custom_text_field.dart';
 import '../../../core/widgets/dashed_divider.dart';
@@ -40,7 +39,14 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
 
   Map<String, dynamic>? _selectedToken;
   bool _isInquiring = false;
-  Map<String, dynamic>? _inquiryResult;
+
+  // State Inquiry Token (Prabayar)
+  Map<String, dynamic>? _tokenInquiryResult;
+  String? _tokenInquiryError;
+
+  // State Inquiry Tagihan (Pascabayar)
+  Map<String, dynamic>? _postpaidInquiryResult;
+  String? _postpaidInquiryError;
 
   @override
   void initState() {
@@ -49,8 +55,17 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     final isMockup = ref.read(mockupModeProvider);
     if (isMockup) {
       _meterController.text = '12000000001';
-      if (_activeType == 'tagihan') {
-        _inquiryResult = {
+      if (_activeType == 'token') {
+        _tokenInquiryResult = {
+          'id': 999,
+          'idpel': '12000000001',
+          'name': 'MAHAYANA GARBILEKA 01',
+          'tarif': 'R1 / 2200 VA',
+        };
+        _selectedToken = _plnTokens.first;
+      } else {
+        _postpaidInquiryResult = {
+          'id': 999,
           'idpel': '12000000001',
           'name': 'MAHAYANA GARBILEKA',
           'tarif': 'R1 / 2200 VA',
@@ -63,7 +78,11 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       }
     } else {
       _meterController.clear();
-      _inquiryResult = null;
+      _tokenInquiryResult = null;
+      _selectedToken = null;
+      _tokenInquiryError = null;
+      _postpaidInquiryResult = null;
+      _postpaidInquiryError = null;
     }
     _loadLiveTokens();
   }
@@ -89,191 +108,77 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     super.dispose();
   }
 
-  void _showConfirmationSheet({
-    required Map<String, dynamic> token,
-    required String meterNo,
-    required String customerName,
-    required String tariffPower,
-    int? inquiryId,
-  }) {
-    final cleanPrice = CurrencyFormatter.clean(token['priceDisplay'] ?? 'Rp ${token['price']}');
-
-    CustomBottomSheet.show(
-      context: context,
-      title: 'Konfirmasi Pembelian Token PLN',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildRow('Layanan', 'PLN Prabayar (Token)'),
-          _buildRow('No. Meter / IDPEL', meterNo),
-          _buildRow('Nama Pelanggan', customerName),
-          _buildRow('Tarif / Daya', tariffPower),
-          const SizedBox(height: 14),
-          const Divider(height: 1, color: AppColors.borderLight),
-          const SizedBox(height: 16),
-          Text(
-            'Detail Pembayaran',
-            style: AppTypography.titleLarge.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 12),
-          _buildRow('Harga', cleanPrice),
-          _buildRow('Biaya Transaksi', 'Gratis (Rp. 0)'),
-          const SizedBox(height: 14),
-          const DashedDivider(color: Color(0xFFCBD5E1), dashWidth: 5, dashSpace: 4),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Total Pembayaran',
-                style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.w600),
-              ),
-              Text(
-                cleanPrice,
-                style: AppTypography.titleLarge.copyWith(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.accentEmeraldDark,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          CustomButton(
-            text: 'Bayar Sekarang',
-            backgroundColor: AppColors.primaryNavy,
-            onPressed: () async {
-              Navigator.of(context).pop();
-              final pin = await PinDialog.show(context);
-              if (pin != null && pin.length == 6) {
-                if (!context.mounted) return;
-
-                final priceInt = (token['price'] as int? ?? 0);
-                final tempTx = TransactionEntity(
-                  id: 0,
-                  skuCode: token['sku'],
-                  productName: token['name'] ?? 'Token PLN ${token['sku']}',
-                  customerNumber: meterNo,
-                  amountCents: priceInt * 100,
-                  amountDisplay: cleanPrice,
-                  sellPriceCents: priceInt * 100,
-                  sellPriceDisplay: cleanPrice,
-                  status: 'pending',
-                  providerRef: null,
-                  createdAt: DateTime.now(),
-                );
-
-                context.pushReplacement(
-                  '/receipt',
-                  extra: ReceiptArgs(
-                    transaction: tempTx,
-                    pinToExecute: pin,
-                    inquiryId: inquiryId,
-                  ),
-                );
-              }
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _onTokenTap(Map<String, dynamic> token, String meterNo) async {
-    setState(() => _selectedToken = token);
-
+  Future<void> _inquireTokenCustomer(String meterNo) async {
     if (meterNo.length < 11) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Harap masukkan 11-12 digit No. Meter')),
+        const SnackBar(content: Text('Harap masukkan 11-12 digit No. Meter / ID Pelanggan')),
       );
       return;
     }
 
+    setState(() {
+      _isInquiring = true;
+      _tokenInquiryError = null;
+      _tokenInquiryResult = null;
+      _selectedToken = null;
+    });
+
     final isMockup = ref.read(mockupModeProvider);
-    setState(() => _isInquiring = true);
 
     try {
-      // 1. Selalu jalankan inquiry ke Backend (Backend inquiry ke Supplier M-Link)
       final repo = ref.read(productRepositoryProvider);
       final result = await repo.inquireProduct(
-        skuCode: token['sku'],
+        skuCode: 'PLN20',
         customerNumber: meterNo,
       );
 
       if (!mounted) return;
-      setState(() => _isInquiring = false);
-
-      final custName = result['customer_name'] as String? ?? 'PELANGGAN PLN / $meterNo';
-      final tariff = result['tariff_power'] as String? ?? 'R1 / 2200 VA';
-      final inquiryId = result['id'] as int?;
-
-      // Tampilkan popup konfirmasi dengan nama dan daya asli dari upstream M-Link
-      _showConfirmationSheet(
-        token: token,
-        meterNo: meterNo,
-        customerName: custName,
-        tariffPower: tariff,
-        inquiryId: inquiryId,
-      );
+      setState(() {
+        _isInquiring = false;
+        _tokenInquiryResult = {
+          'id': result['id'],
+          'idpel': meterNo,
+          'name': result['customer_name'] ?? 'PELANGGAN PLN / $meterNo',
+          'tarif': result['tariff_power'] ?? 'R1 / 2200 VA',
+        };
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _isInquiring = false);
 
-      // 2. Jika backend merespon dengan error bisnis (RC 007 nomor tidak ditemukan, 006 gangguan biller, dsb)
       if (e is AppException && e.statusCode != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.message),
-            backgroundColor: AppColors.error,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-        // Popup konfirmasi DIBLOKIR! Tidak ada pembayaran untuk nomor yang ditolak upstream!
+        setState(() {
+          _tokenInquiryError = e.message;
+        });
         return;
       }
 
-      // 3. Jika gagal koneksi (network/offline/server belum jalan):
       if (isMockup) {
-        // Pada mode mockup simulasi sekalipun, nomor khusus pengujian gagal M-Link WAJIB DITOLAK!
         if (meterNo == '12000000000') {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan'),
-              backgroundColor: AppColors.error,
-              duration: Duration(seconds: 4),
-            ),
-          );
+          setState(() {
+            _tokenInquiryError = 'Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan';
+          });
           return;
         }
         if (meterNo == '12000000004') {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Inquiry PLN gagal [RC: 006]: Gagal - Gangguan Biller'),
-              backgroundColor: AppColors.error,
-              duration: Duration(seconds: 4),
-            ),
-          );
+          setState(() {
+            _tokenInquiryError = 'Inquiry PLN gagal [RC: 006]: Gagal - Gangguan Biller';
+          });
           return;
         }
 
-        // Nomor simulasi sukses
-        _showConfirmationSheet(
-          token: token,
-          meterNo: meterNo,
-          customerName: 'MAHAYANA GARBILEKA',
-          tariffPower: 'R1 / 2200 VA',
-          inquiryId: 999,
-        );
+        setState(() {
+          _tokenInquiryResult = {
+            'id': 999,
+            'idpel': meterNo,
+            'name': 'MAHAYANA GARBILEKA 01',
+            'tarif': 'R1 / 2200 VA',
+          };
+        });
       } else {
-        // Mode Live: Tampilkan info kegagalan koneksi ke backend
-        final targetUrl = AppConfig.instance.apiBaseUrl;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Gagal menghubungi backend ($targetUrl). Pastikan php artisan serve aktif.'),
-            backgroundColor: AppColors.error,
-            duration: const Duration(seconds: 4),
-          ),
-        );
+        setState(() {
+          _tokenInquiryError = 'Gagal menghubungi server backend (${AppConfig.instance.apiBaseUrl}). Pastikan server aktif.';
+        });
       }
     }
   }
@@ -286,7 +191,12 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       return;
     }
 
-    setState(() => _isInquiring = true);
+    setState(() {
+      _isInquiring = true;
+      _postpaidInquiryError = null;
+      _postpaidInquiryResult = null;
+    });
+
     final isMockup = ref.read(mockupModeProvider);
 
     try {
@@ -299,7 +209,7 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       if (!mounted) return;
       setState(() {
         _isInquiring = false;
-        _inquiryResult = {
+        _postpaidInquiryResult = {
           'id': result['id'],
           'idpel': idpel,
           'name': result['customer_name'] ?? 'PELANGGAN PLN / $idpel',
@@ -316,27 +226,21 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       setState(() => _isInquiring = false);
 
       if (e is AppException && e.statusCode != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.message),
-            backgroundColor: AppColors.error,
-          ),
-        );
+        setState(() {
+          _postpaidInquiryError = e.message;
+        });
         return;
       }
 
       if (isMockup) {
         if (idpel == '12000000000') {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan'),
-              backgroundColor: AppColors.error,
-            ),
-          );
+          setState(() {
+            _postpaidInquiryError = 'Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan';
+          });
           return;
         }
         setState(() {
-          _inquiryResult = {
+          _postpaidInquiryResult = {
             'id': 999,
             'idpel': idpel,
             'name': 'MAHAYANA GARBILEKA',
@@ -349,13 +253,78 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
           };
         });
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Tagihan tidak ditemukan atau koneksi ke backend gagal (${AppConfig.instance.apiBaseUrl}).'),
-            backgroundColor: AppColors.error,
-          ),
-        );
+        setState(() {
+          _postpaidInquiryError = 'Tagihan tidak ditemukan atau koneksi ke backend gagal (${AppConfig.instance.apiBaseUrl}).';
+        });
       }
+    }
+  }
+
+  Future<void> _handleTokenPayment() async {
+    if (_selectedToken == null || _tokenInquiryResult == null) return;
+
+    final pin = await PinDialog.show(context);
+    if (pin != null && pin.length == 6) {
+      if (!mounted) return;
+
+      final meterNo = _meterController.text.trim();
+      final priceInt = (_selectedToken!['price'] as int? ?? 0);
+      final cleanPrice = CurrencyFormatter.clean(_selectedToken!['priceDisplay'] ?? 'Rp ${_selectedToken!['price']}');
+
+      final tempTx = TransactionEntity(
+        id: 0,
+        skuCode: _selectedToken!['sku'],
+        productName: _selectedToken!['name'] ?? 'Token PLN ${_selectedToken!['sku']}',
+        customerNumber: meterNo,
+        amountCents: priceInt * 100,
+        amountDisplay: cleanPrice,
+        sellPriceCents: priceInt * 100,
+        sellPriceDisplay: cleanPrice,
+        status: 'pending',
+        providerRef: null,
+        createdAt: DateTime.now(),
+      );
+
+      context.pushReplacement(
+        '/receipt',
+        extra: ReceiptArgs(
+          transaction: tempTx,
+          pinToExecute: pin,
+          inquiryId: _tokenInquiryResult!['id'] as int?,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handlePostpaidPayment() async {
+    if (_postpaidInquiryResult == null) return;
+
+    final pin = await PinDialog.show(context);
+    if (pin != null && pin.length == 6) {
+      if (!mounted) return;
+
+      final tempTx = TransactionEntity(
+        id: 0,
+        skuCode: 'PLNPOST',
+        productName: 'Tagihan Listrik PLN (${_postpaidInquiryResult!['name'] ?? _postpaidInquiryResult!['idpel']})',
+        customerNumber: _postpaidInquiryResult!['idpel'],
+        amountCents: 0,
+        amountDisplay: CurrencyFormatter.clean(_postpaidInquiryResult!['total']),
+        sellPriceCents: 0,
+        sellPriceDisplay: CurrencyFormatter.clean(_postpaidInquiryResult!['total']),
+        status: 'pending',
+        providerRef: null,
+        createdAt: DateTime.now(),
+      );
+
+      context.pushReplacement(
+        '/receipt',
+        extra: ReceiptArgs(
+          transaction: tempTx,
+          pinToExecute: pin,
+          inquiryId: _postpaidInquiryResult!['id'] as int?,
+        ),
+      );
     }
   }
 
@@ -366,7 +335,13 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: AppTypography.bodySmall),
-          Text(value, style: AppTypography.bodyLarge.copyWith(fontWeight: FontWeight.w600)),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: AppTypography.bodyLarge.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
         ],
       ),
     );
@@ -375,28 +350,105 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
   @override
   Widget build(BuildContext context) {
     ref.listen<bool>(mockupModeProvider, (previous, next) {
-      if (!next && mounted) {
+      if (mounted) {
         setState(() {
-          _meterController.clear();
-          _inquiryResult = null;
-          _selectedToken = null;
+          if (!next) {
+            _meterController.clear();
+            _tokenInquiryResult = null;
+            _selectedToken = null;
+            _tokenInquiryError = null;
+            _postpaidInquiryResult = null;
+            _postpaidInquiryError = null;
+          } else {
+            _meterController.text = '12000000001';
+            if (_activeType == 'token') {
+              _tokenInquiryResult = {
+                'id': 999,
+                'idpel': '12000000001',
+                'name': 'MAHAYANA GARBILEKA 01',
+                'tarif': 'R1 / 2200 VA',
+              };
+              _selectedToken = _plnTokens.first;
+            } else {
+              _postpaidInquiryResult = {
+                'id': 999,
+                'idpel': '12000000001',
+                'name': 'MAHAYANA GARBILEKA',
+                'tarif': 'R1 / 2200 VA',
+                'periode': 'Nov 2026',
+                'standMeter': '014820 - 015140 (320 kWh)',
+                'tagihan': 'Rp 245.800',
+                'admin': 'Rp 2.500',
+                'total': 'Rp 248.300',
+              };
+            }
+          }
         });
       }
     });
 
     final isMockup = ref.watch(mockupModeProvider);
+    final meterText = _meterController.text.trim();
+    final canInquire = meterText.length >= 11;
 
     return Scaffold(
       backgroundColor: AppColors.bgLight,
       appBar: AppBar(
         title: const Text('Listrik PLN'),
       ),
+      bottomNavigationBar: (_activeType == 'token' && _selectedToken != null && _tokenInquiryResult != null)
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceWhite,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 10,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Total Pembayaran', style: AppTypography.bodySmall),
+                          const SizedBox(height: 2),
+                          Text(
+                            CurrencyFormatter.clean(_selectedToken!['priceDisplay'] ?? 'Rp ${_selectedToken!['price']}'),
+                            style: AppTypography.titleLarge.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.accentEmeraldDark,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: CustomButton(
+                        text: 'Bayar Sekarang',
+                        backgroundColor: AppColors.primaryNavy,
+                        onPressed: _handleTokenPayment,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Switch Banner Mode Pengujian: Live API vs Demo Mockup
+            // Banner Mode Pengujian: Live API vs Demo Mockup
             Container(
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -478,9 +530,18 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       onTap: () {
                         setState(() {
                           _activeType = 'token';
-                          _inquiryResult = null;
+                          _tokenInquiryResult = null;
+                          _tokenInquiryError = null;
+                          _selectedToken = null;
                           if (isMockup) {
                             _meterController.text = '12000000001';
+                            _tokenInquiryResult = {
+                              'id': 999,
+                              'idpel': '12000000001',
+                              'name': 'MAHAYANA GARBILEKA 01',
+                              'tarif': 'R1 / 2200 VA',
+                            };
+                            _selectedToken = _plnTokens.first;
                           } else {
                             _meterController.clear();
                           }
@@ -510,9 +571,12 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       onTap: () {
                         setState(() {
                           _activeType = 'tagihan';
+                          _postpaidInquiryResult = null;
+                          _postpaidInquiryError = null;
                           if (isMockup) {
                             _meterController.text = '12000000001';
-                            _inquiryResult = {
+                            _postpaidInquiryResult = {
+                              'id': 999,
                               'idpel': '12000000001',
                               'name': 'MAHAYANA GARBILEKA',
                               'tarif': 'R1 / 2200 VA',
@@ -524,7 +588,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                             };
                           } else {
                             _meterController.clear();
-                            _inquiryResult = null;
                           }
                         });
                       },
@@ -599,7 +662,20 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                     hint: isMockup ? 'Contoh: 1200 0000 001' : 'Masukkan 11-12 digit No. Meter / IDPEL',
                     keyboardType: TextInputType.number,
                     prefix: const Icon(Icons.pin, color: AppColors.textSecondary),
-                    onChanged: (_) => setState(() {}),
+                    onChanged: (val) {
+                      setState(() {
+                        // Reset inquiry state saat input berubah
+                        if (_tokenInquiryResult != null || _tokenInquiryError != null) {
+                          _tokenInquiryResult = null;
+                          _tokenInquiryError = null;
+                          _selectedToken = null;
+                        }
+                        if (_postpaidInquiryResult != null || _postpaidInquiryError != null) {
+                          _postpaidInquiryResult = null;
+                          _postpaidInquiryError = null;
+                        }
+                      });
+                    },
                     suffix: isMockup
                         ? IconButton(
                             icon: const Icon(Icons.flash_on, color: Colors.amber),
@@ -608,8 +684,26 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                               setState(() {
                                 _meterController.text = '12000000001';
                               });
+                              _inquireTokenCustomer('12000000001');
                             },
                           )
+                        : null,
+                  ),
+                  const SizedBox(height: 12),
+                  // Tombol Cek ID Pelanggan
+                  CustomButton(
+                    text: _activeType == 'token' ? 'Cek ID Pelanggan' : 'Cek Tagihan Listrik',
+                    isLoading: _isInquiring,
+                    backgroundColor: canInquire ? AppColors.primaryNavy : AppColors.borderLight,
+                    textColor: canInquire ? Colors.white : AppColors.textSecondary,
+                    onPressed: canInquire
+                        ? () {
+                            if (_activeType == 'token') {
+                              _inquireTokenCustomer(meterText);
+                            } else {
+                              _inquirePostpaidBill(meterText);
+                            }
+                          }
                         : null,
                   ),
                   if (isMockup) ...[
@@ -625,10 +719,132 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
 
             const SizedBox(height: 20),
 
-            // Content Mode: Token Listrik
+            // ═══════════════════════════════════════════════════════════════════
+            // BAGIAN TOKEN LISTRIK (PRABAYAR)
+            // ═══════════════════════════════════════════════════════════════════
             if (_activeType == 'token') ...[
-              if (isMockup || _meterController.text.trim().length >= 11) ...[
-                Text('Pilih Nominal Token', style: AppTypography.titleMedium),
+              // Kasus 1: Error Inquiry
+              if (_tokenInquiryError != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.errorBg,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 24),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Inquiry Pelanggan Gagal',
+                              style: AppTypography.titleSmall.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.error,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _tokenInquiryError!,
+                              style: AppTypography.bodySmall.copyWith(
+                                color: AppColors.error,
+                                height: 1.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
+
+              // Kasus 2: Berhasil Inquiry -> Tampilkan Kartu Pelanggan Terverifikasi
+              if (_tokenInquiryResult != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceWhite,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.accentEmeraldDark.withValues(alpha: 0.5)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.accentEmeraldDark.withValues(alpha: 0.06),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.check_circle_rounded, color: AppColors.accentEmeraldDark, size: 20),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Data Pelanggan PLN',
+                                style: AppTypography.titleSmall.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primaryNavy,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentMint,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.verified, size: 12, color: AppColors.accentEmeraldDark),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Terverifikasi',
+                                  style: AppTypography.bodySmall.copyWith(
+                                    color: AppColors.accentEmeraldDark,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 20, color: AppColors.borderLight),
+                      _buildRow('No. Meter / IDPEL', _tokenInquiryResult!['idpel'] ?? '-'),
+                      _buildRow('Nama Pelanggan', _tokenInquiryResult!['name'] ?? '-'),
+                      _buildRow('Tarif / Daya', _tokenInquiryResult!['tarif'] ?? '-'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Grid Nominal Token Listrik (Aktif setelah nomor meter terverifikasi)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Pilih Nominal Token', style: AppTypography.titleMedium),
+                    Text(
+                      'Harga Netto',
+                      style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 GridView.builder(
                   shrinkWrap: true,
@@ -643,11 +859,12 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                   itemBuilder: (context, index) {
                     final token = _plnTokens[index];
                     final isSelected = _selectedToken == token;
-                    final isProcessingThis = _isInquiring && isSelected;
                     return InkWell(
-                      onTap: _isInquiring
-                          ? null
-                          : () => _onTokenTap(token, _meterController.text.trim()),
+                      onTap: () {
+                        setState(() {
+                          _selectedToken = token;
+                        });
+                      },
                       borderRadius: BorderRadius.circular(14),
                       child: Container(
                         padding: const EdgeInsets.all(12),
@@ -658,36 +875,35 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                             color: isSelected ? AppColors.accentEmeraldDark : AppColors.borderLight,
                             width: isSelected ? 2 : 1,
                           ),
+                          boxShadow: isSelected
+                              ? [
+                                  BoxShadow(
+                                    color: AppColors.accentEmeraldDark.withValues(alpha: 0.12),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ]
+                              : null,
                         ),
-                        child: isProcessingThis
-                            ? Center(
-                                child: SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
-                                  ),
-                                ),
-                              )
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(token['name'], style: AppTypography.titleSmall),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    token['priceDisplay'],
-                                    style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
-                                  ),
-                                ],
-                              ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(token['name'], style: AppTypography.titleSmall),
+                            const SizedBox(height: 4),
+                            Text(
+                              token['priceDisplay'],
+                              style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },
                 ),
-              ] else ...[
-                // Placeholder bersih saat nomor meter belum diisi (Mode Live Prod)
+                const SizedBox(height: 60),
+              ] else if (_tokenInquiryError == null) ...[
+                // Placeholder bersih saat belum dilakukan inquiry
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
@@ -708,30 +924,50 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'Masukkan Nomor Meter / IDPEL',
+                        'Masukkan & Periksa Nomor Meter',
                         style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Ketik 11-12 digit nomor meter atau ID pelanggan PLN Anda di atas untuk menampilkan pilihan nominal token listrik.',
+                        'Ketik 11-12 digit No. Meter atau ID Pelanggan Anda di atas, lalu klik "Cek ID Pelanggan" untuk memverifikasi data dan memilih nominal token listrik.',
                         textAlign: TextAlign.center,
-                        style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+                        style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, height: 1.4),
                       ),
                     ],
                   ),
                 ),
               ],
             ] else ...[
-              // Content Mode: Tagihan Listrik
-              if (_inquiryResult == null) ...[
-                CustomButton(
-                  text: 'Cek Tagihan Listrik',
-                  isLoading: _isInquiring,
-                  backgroundColor: AppColors.primaryNavy,
-                  onPressed: () => _inquirePostpaidBill(_meterController.text.trim()),
+              // ═════════════════════════════════════════════════════════════════
+              // BAGIAN TAGIHAN LISTRIK (PASCABAYAR)
+              // ═════════════════════════════════════════════════════════════════
+              if (_postpaidInquiryError != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.errorBg,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 24),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _postpaidInquiryError!,
+                          style: AppTypography.bodySmall.copyWith(color: AppColors.error),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ] else ...[
-                // Hasil Inquiry Tagihan
+                const SizedBox(height: 20),
+              ],
+
+              if (_postpaidInquiryResult != null) ...[
+                // Hasil Rincian Tagihan Listrik
                 Container(
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
@@ -763,11 +999,11 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                         ],
                       ),
                       const Divider(height: 24),
-                      _buildRow('ID Pelanggan', _inquiryResult!['idpel']),
-                      _buildRow('Nama Pelanggan', _inquiryResult!['name']),
-                      _buildRow('Tarif / Daya', _inquiryResult!['tarif']),
-                      _buildRow('Periode', _inquiryResult!['periode']),
-                      _buildRow('Stand Meter', _inquiryResult!['standMeter']),
+                      _buildRow('ID Pelanggan', _postpaidInquiryResult!['idpel'] ?? '-'),
+                      _buildRow('Nama Pelanggan', _postpaidInquiryResult!['name'] ?? '-'),
+                      _buildRow('Tarif / Daya', _postpaidInquiryResult!['tarif'] ?? '-'),
+                      _buildRow('Periode', _postpaidInquiryResult!['periode'] ?? '-'),
+                      _buildRow('Stand Meter', _postpaidInquiryResult!['standMeter'] ?? '-'),
                       const SizedBox(height: 12),
                       const Divider(height: 1, color: AppColors.borderLight),
                       const SizedBox(height: 16),
@@ -776,8 +1012,8 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                         style: AppTypography.titleLarge.copyWith(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 12),
-                      _buildRow('Tagihan Listrik', CurrencyFormatter.clean(_inquiryResult!['tagihan'])),
-                      _buildRow('Biaya Transaksi', CurrencyFormatter.clean(_inquiryResult!['admin'])),
+                      _buildRow('Tagihan Listrik', CurrencyFormatter.clean(_postpaidInquiryResult!['tagihan'] ?? '0')),
+                      _buildRow('Biaya Transaksi', CurrencyFormatter.clean(_postpaidInquiryResult!['admin'] ?? '0')),
                       const SizedBox(height: 14),
                       const DashedDivider(color: Color(0xFFCBD5E1), dashWidth: 5, dashSpace: 4),
                       const SizedBox(height: 14),
@@ -786,7 +1022,7 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                         children: [
                           Text('Total Pembayaran', style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.w600)),
                           Text(
-                            CurrencyFormatter.clean(_inquiryResult!['total']),
+                            CurrencyFormatter.clean(_postpaidInquiryResult!['total'] ?? '0'),
                             style: AppTypography.titleLarge.copyWith(
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
@@ -799,35 +1035,7 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       CustomButton(
                         text: 'Bayar Tagihan Sekarang',
                         backgroundColor: AppColors.primaryNavy,
-                        onPressed: () async {
-                          final pin = await PinDialog.show(context);
-                          if (pin != null && pin.length == 6) {
-                            if (!context.mounted) return;
-
-                            final tempTx = TransactionEntity(
-                              id: 0,
-                              skuCode: 'PLNPOST',
-                              productName: 'Tagihan Listrik PLN (${_inquiryResult!['nama'] ?? _inquiryResult!['idpel']})',
-                              customerNumber: _inquiryResult!['idpel'],
-                              amountCents: 0,
-                              amountDisplay: CurrencyFormatter.clean(_inquiryResult!['total']),
-                              sellPriceCents: 0,
-                              sellPriceDisplay: CurrencyFormatter.clean(_inquiryResult!['total']),
-                              status: 'pending',
-                              providerRef: null,
-                              createdAt: DateTime.now(),
-                            );
-
-                            context.pushReplacement(
-                              '/receipt',
-                              extra: ReceiptArgs(
-                                transaction: tempTx,
-                                pinToExecute: pin,
-                                inquiryId: _inquiryResult!['id'] as int?,
-                              ),
-                            );
-                          }
-                        },
+                        onPressed: _handlePostpaidPayment,
                       ),
                     ],
                   ),
@@ -840,4 +1048,3 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     );
   }
 }
-
