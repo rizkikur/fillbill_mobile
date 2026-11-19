@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
@@ -48,6 +49,12 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
   Map<String, dynamic>? _postpaidInquiryResult;
   String? _postpaidInquiryError;
 
+  /// Validasi nomor meter/ID Pelanggan: harus angka dan panjang 11 - 12 digit
+  bool get _isMeterValid {
+    final text = _meterController.text.trim();
+    return RegExp(r'^\d{11,12}$').hasMatch(text);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -55,27 +62,8 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     final isMockup = ref.read(mockupModeProvider);
     if (isMockup) {
       _meterController.text = '12000000001';
-      if (_activeType == 'token') {
-        _tokenInquiryResult = {
-          'id': 999,
-          'idpel': '12000000001',
-          'name': 'MAHAYANA GARBILEKA 01',
-          'tarif': 'R1 / 2200 VA',
-        };
-        _selectedToken = _plnTokens.first;
-      } else {
-        _postpaidInquiryResult = {
-          'id': 999,
-          'idpel': '12000000001',
-          'name': 'MAHAYANA GARBILEKA',
-          'tarif': 'R1 / 2200 VA',
-          'periode': 'Nov 2026',
-          'standMeter': '014820 - 015140 (320 kWh)',
-          'tagihan': 'Rp 245.800',
-          'admin': 'Rp 2.500',
-          'total': 'Rp 248.300',
-        };
-      }
+      _tokenInquiryResult = null;
+      _selectedToken = null;
     } else {
       _meterController.clear();
       _tokenInquiryResult = null;
@@ -108,16 +96,17 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     super.dispose();
   }
 
-  /// Alur B: Saat nominal token di-klik, langsung lakukan inquiry ke BE & tampilkan info pelanggan + total
+  /// Alur Prabayar:
+  /// 1. Nomor meter lolos validasi (11-12 digit angka) -> Produk baru muncul.
+  /// 2. User klik nominal token -> Langsung inquiry ke BE.
+  /// 3. Respon inquiry & info akun ditampilkan di POPUP (Modal Bottom Sheet).
+  /// 4. User klik "Bayar Sekarang" di popup -> Dialog PIN -> Eksekusi Pembayaran.
   Future<void> _onTokenSelected(Map<String, dynamic> token) async {
     final meterNo = _meterController.text.trim();
-    if (meterNo.length < 11) {
-      setState(() {
-        _selectedToken = token;
-      });
+    if (!_isMeterValid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Ketik 11-12 digit No. Meter / ID Pelanggan terlebih dahulu'),
+          content: Text('Nomor meter tidak valid. Harus 11-12 digit angka.'),
           duration: Duration(seconds: 2),
         ),
       );
@@ -126,17 +115,8 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
 
     setState(() {
       _selectedToken = token;
-      _tokenInquiryError = null;
-    });
-
-    // Jika nomor meter sudah berhasil di-inquiry sebelumnya, cukup update denom yang dipilih
-    if (_tokenInquiryResult != null && _tokenInquiryResult!['idpel'] == meterNo) {
-      return;
-    }
-
-    setState(() {
       _isInquiring = true;
-      _tokenInquiryResult = null;
+      _tokenInquiryError = null;
     });
 
     final isMockup = ref.read(mockupModeProvider);
@@ -149,53 +129,322 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       );
 
       if (!mounted) return;
+      final inqResult = {
+        'id': result['id'],
+        'idpel': meterNo,
+        'name': result['customer_name'] ?? 'PELANGGAN PLN / $meterNo',
+        'tarif': result['tariff_power'] ?? 'R1 / 2200 VA',
+      };
+
       setState(() {
         _isInquiring = false;
-        _tokenInquiryResult = {
-          'id': result['id'],
-          'idpel': meterNo,
-          'name': result['customer_name'] ?? 'PELANGGAN PLN / $meterNo',
-          'tarif': result['tariff_power'] ?? 'R1 / 2200 VA',
-        };
+        _tokenInquiryResult = inqResult;
       });
+
+      // Tampilkan info akun & konfirmasi di POPUP (Modal Bottom Sheet)
+      _showTokenConfirmationSheet(context, token, inqResult);
     } catch (e) {
       if (!mounted) return;
       setState(() => _isInquiring = false);
 
+      String errorMsg = 'Gagal melakukan inquiry PLN.';
       if (e is AppException && e.statusCode != null) {
-        setState(() {
-          _tokenInquiryError = e.message;
-        });
-        return;
-      }
-
-      if (isMockup) {
+        errorMsg = e.message;
+      } else if (isMockup) {
         if (meterNo == '12000000000') {
-          setState(() {
-            _tokenInquiryError = 'Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan';
-          });
-          return;
-        }
-        if (meterNo == '12000000004') {
-          setState(() {
-            _tokenInquiryError = 'Inquiry PLN gagal [RC: 006]: Gagal - Gangguan Biller';
-          });
-          return;
-        }
-
-        setState(() {
-          _tokenInquiryResult = {
+          errorMsg = 'Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan';
+        } else if (meterNo == '12000000004') {
+          errorMsg = 'Inquiry PLN gagal [RC: 006]: Gagal - Gangguan Biller';
+        } else {
+          // Mockup fallback success
+          final inqResult = {
             'id': 999,
             'idpel': meterNo,
             'name': 'MAHAYANA GARBILEKA 01',
             'tarif': 'R1 / 2200 VA',
           };
-        });
+          setState(() {
+            _tokenInquiryResult = inqResult;
+          });
+          _showTokenConfirmationSheet(context, token, inqResult);
+          return;
+        }
       } else {
-        setState(() {
-          _tokenInquiryError = 'Gagal menghubungi server backend (${AppConfig.instance.apiBaseUrl}). Pastikan server aktif.';
-        });
+        errorMsg = 'Gagal menghubungi server backend (${AppConfig.instance.apiBaseUrl}). Pastikan server aktif.';
       }
+
+      setState(() {
+        _tokenInquiryError = errorMsg;
+      });
+
+      _showErrorDialog(context, errorMsg);
+    }
+  }
+
+  void _showErrorDialog(BuildContext context, String message) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 24),
+            const SizedBox(width: 8),
+            Text(
+              'Inquiry Gagal',
+              style: AppTypography.titleMedium.copyWith(
+                fontWeight: FontWeight.w700,
+                color: AppColors.error,
+              ),
+            ),
+          ],
+        ),
+        content: Text(message, style: AppTypography.bodyMedium),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Mengerti', style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// POPUP Modal Bottom Sheet: Menampilkan data akun & rincian pembayaran
+  void _showTokenConfirmationSheet(
+    BuildContext context,
+    Map<String, dynamic> token,
+    Map<String, dynamic> inquiryData,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final priceDisplay = CurrencyFormatter.clean(token['priceDisplay'] ?? 'Rp ${token['price']}');
+
+        return Container(
+          decoration: const BoxDecoration(
+            color: AppColors.surfaceWhite,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Drag Handle
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+
+                // Header Popup
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.bolt, color: Colors.orange, size: 24),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Konfirmasi Pembelian Token',
+                            style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Periksa data pelanggan sebelum membayar',
+                            style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                  ],
+                ),
+
+                const Divider(height: 24, color: AppColors.borderLight),
+
+                // 1. DATA AKUN / PELANGGAN
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.borderLight),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.verified_user_rounded, color: AppColors.accentEmeraldDark, size: 16),
+                              const SizedBox(width: 6),
+                              Text(
+                                'DATA PELANGGAN PLN',
+                                style: AppTypography.bodySmall.copyWith(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.accentEmeraldDark,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentMint,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'Terverifikasi',
+                              style: AppTypography.bodySmall.copyWith(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.accentEmeraldDark,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      _buildRow('No. Meter / IDPEL', inquiryData['idpel'] ?? '-'),
+                      _buildRow('Nama Pelanggan', inquiryData['name'] ?? '-'),
+                      _buildRow('Tarif / Daya', inquiryData['tarif'] ?? '-'),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                // 2. RINCIAN PEMBAYARAN
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppColors.borderLight),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.receipt_rounded, color: AppColors.primaryNavy, size: 16),
+                          const SizedBox(width: 6),
+                          Text(
+                            'RINCIAN PEMBAYARAN',
+                            style: AppTypography.bodySmall.copyWith(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.primaryNavy,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      _buildRow('Produk', token['name']),
+                      _buildRow('Harga Token', priceDisplay),
+                      _buildRow('Biaya Admin', 'Gratis (Rp 0)'),
+                      const SizedBox(height: 6),
+                      const DashedDivider(color: Color(0xFFCBD5E1), dashWidth: 5, dashSpace: 4),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Total Bayar', style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700)),
+                          Text(
+                            priceDisplay,
+                            style: AppTypography.titleLarge.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.accentEmeraldDark,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // Tombol Bayar Sekarang
+                CustomButton(
+                  text: 'Bayar Sekarang',
+                  backgroundColor: AppColors.primaryNavy,
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    _executeTokenPayment(token, inquiryData);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _executeTokenPayment(
+    Map<String, dynamic> token,
+    Map<String, dynamic> inquiryData,
+  ) async {
+    final pin = await PinDialog.show(context);
+    if (pin != null && pin.length == 6) {
+      if (!mounted) return;
+
+      final meterNo = _meterController.text.trim();
+      final priceInt = (token['price'] as int? ?? 0);
+      final cleanPrice = CurrencyFormatter.clean(token['priceDisplay'] ?? 'Rp ${token['price']}');
+
+      final tempTx = TransactionEntity(
+        id: 0,
+        skuCode: token['sku'],
+        productName: token['name'] ?? 'Token PLN ${token['sku']}',
+        customerNumber: meterNo,
+        amountCents: priceInt * 100,
+        amountDisplay: cleanPrice,
+        sellPriceCents: priceInt * 100,
+        sellPriceDisplay: cleanPrice,
+        status: 'pending',
+        providerRef: null,
+        createdAt: DateTime.now(),
+      );
+
+      context.pushReplacement(
+        '/receipt',
+        extra: ReceiptArgs(
+          transaction: tempTx,
+          pinToExecute: pin,
+          inquiryId: inquiryData['id'] as int?,
+        ),
+      );
     }
   }
 
@@ -276,42 +525,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     }
   }
 
-  Future<void> _handleTokenPayment() async {
-    if (_selectedToken == null || _tokenInquiryResult == null) return;
-
-    final pin = await PinDialog.show(context);
-    if (pin != null && pin.length == 6) {
-      if (!mounted) return;
-
-      final meterNo = _meterController.text.trim();
-      final priceInt = (_selectedToken!['price'] as int? ?? 0);
-      final cleanPrice = CurrencyFormatter.clean(_selectedToken!['priceDisplay'] ?? 'Rp ${_selectedToken!['price']}');
-
-      final tempTx = TransactionEntity(
-        id: 0,
-        skuCode: _selectedToken!['sku'],
-        productName: _selectedToken!['name'] ?? 'Token PLN ${_selectedToken!['sku']}',
-        customerNumber: meterNo,
-        amountCents: priceInt * 100,
-        amountDisplay: cleanPrice,
-        sellPriceCents: priceInt * 100,
-        sellPriceDisplay: cleanPrice,
-        status: 'pending',
-        providerRef: null,
-        createdAt: DateTime.now(),
-      );
-
-      context.pushReplacement(
-        '/receipt',
-        extra: ReceiptArgs(
-          transaction: tempTx,
-          pinToExecute: pin,
-          inquiryId: _tokenInquiryResult!['id'] as int?,
-        ),
-      );
-    }
-  }
-
   Future<void> _handlePostpaidPayment() async {
     if (_postpaidInquiryResult == null) return;
 
@@ -377,27 +590,8 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
             _postpaidInquiryError = null;
           } else {
             _meterController.text = '12000000001';
-            if (_activeType == 'token') {
-              _tokenInquiryResult = {
-                'id': 999,
-                'idpel': '12000000001',
-                'name': 'MAHAYANA GARBILEKA 01',
-                'tarif': 'R1 / 2200 VA',
-              };
-              _selectedToken = _plnTokens.first;
-            } else {
-              _postpaidInquiryResult = {
-                'id': 999,
-                'idpel': '12000000001',
-                'name': 'MAHAYANA GARBILEKA',
-                'tarif': 'R1 / 2200 VA',
-                'periode': 'Nov 2026',
-                'standMeter': '014820 - 015140 (320 kWh)',
-                'tagihan': 'Rp 245.800',
-                'admin': 'Rp 2.500',
-                'total': 'Rp 248.300',
-              };
-            }
+            _tokenInquiryResult = null;
+            _selectedToken = null;
           }
         });
       }
@@ -405,59 +599,13 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
 
     final isMockup = ref.watch(mockupModeProvider);
     final meterText = _meterController.text.trim();
+    final isMeterValid = _isMeterValid;
 
     return Scaffold(
       backgroundColor: AppColors.bgLight,
       appBar: AppBar(
         title: const Text('Listrik PLN'),
       ),
-      bottomNavigationBar: (_activeType == 'token' && _selectedToken != null && _tokenInquiryResult != null)
-          ? Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceWhite,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 10,
-                    offset: const Offset(0, -4),
-                  ),
-                ],
-              ),
-              child: SafeArea(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Total Pembayaran', style: AppTypography.bodySmall),
-                          const SizedBox(height: 2),
-                          Text(
-                            CurrencyFormatter.clean(_selectedToken!['priceDisplay'] ?? 'Rp ${_selectedToken!['price']}'),
-                            style: AppTypography.titleLarge.copyWith(
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.accentEmeraldDark,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: CustomButton(
-                        text: 'Bayar Sekarang',
-                        backgroundColor: AppColors.primaryNavy,
-                        onPressed: _handleTokenPayment,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -550,13 +698,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                           _selectedToken = null;
                           if (isMockup) {
                             _meterController.text = '12000000001';
-                            _tokenInquiryResult = {
-                              'id': 999,
-                              'idpel': '12000000001',
-                              'name': 'MAHAYANA GARBILEKA 01',
-                              'tarif': 'R1 / 2200 VA',
-                            };
-                            _selectedToken = _plnTokens.first;
                           } else {
                             _meterController.clear();
                           }
@@ -590,17 +731,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                           _postpaidInquiryError = null;
                           if (isMockup) {
                             _meterController.text = '12000000001';
-                            _postpaidInquiryResult = {
-                              'id': 999,
-                              'idpel': '12000000001',
-                              'name': 'MAHAYANA GARBILEKA',
-                              'tarif': 'R1 / 2200 VA',
-                              'periode': 'Nov 2026',
-                              'standMeter': '014820 - 015140 (320 kWh)',
-                              'tagihan': 'Rp 245.800',
-                              'admin': 'Rp 2.500',
-                              'total': 'Rp 248.300',
-                            };
                           } else {
                             _meterController.clear();
                           }
@@ -637,7 +767,10 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
               decoration: BoxDecoration(
                 color: AppColors.surfaceWhite,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.borderLight),
+                border: Border.all(
+                  color: isMeterValid ? AppColors.accentEmeraldDark : AppColors.borderLight,
+                  width: isMeterValid ? 1.5 : 1,
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -652,17 +785,23 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: 0.15),
+                          color: isMeterValid
+                              ? AppColors.accentMint
+                              : Colors.amber.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.bolt, size: 14, color: Colors.amber),
+                            Icon(
+                              isMeterValid ? Icons.check_circle : Icons.bolt,
+                              size: 14,
+                              color: isMeterValid ? AppColors.accentEmeraldDark : Colors.amber,
+                            ),
                             const SizedBox(width: 4),
                             Text(
-                              'PLN',
+                              isMeterValid ? '11-12 Digit Sesuai' : 'PLN Prabayar',
                               style: AppTypography.bodySmall.copyWith(
-                                color: Colors.orange.shade800,
+                                color: isMeterValid ? AppColors.accentEmeraldDark : Colors.orange.shade800,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -674,12 +813,15 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                   const SizedBox(height: 8),
                   CustomTextField(
                     controller: _meterController,
-                    hint: isMockup ? 'Contoh: 1200 0000 001' : 'Masukkan 11-12 digit No. Meter / IDPEL',
+                    hint: isMockup ? 'Contoh: 12000000001' : 'Masukkan 11-12 digit No. Meter / IDPEL',
                     keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(12),
+                    ],
                     prefix: const Icon(Icons.pin, color: AppColors.textSecondary),
                     onChanged: (val) {
                       setState(() {
-                        // Reset inquiry state saat input nomor meter diubah
                         if (_tokenInquiryResult != null || _tokenInquiryError != null) {
                           _tokenInquiryResult = null;
                           _tokenInquiryError = null;
@@ -700,7 +842,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                                 _tokenInquiryResult = null;
                                 _tokenInquiryError = null;
                               });
-                              _onTokenSelected(_plnTokens.first);
                             },
                           )
                         : null,
@@ -719,252 +860,14 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
             const SizedBox(height: 20),
 
             // ═══════════════════════════════════════════════════════════════════
-            // BAGIAN TOKEN LISTRIK (PRABAYAR) - ALUR B: KLIK DENOM LANGSUNG INQ
+            // BAGIAN TOKEN LISTRIK (PRABAYAR)
             // ═══════════════════════════════════════════════════════════════════
             if (_activeType == 'token') ...[
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('Pilih Nominal Token', style: AppTypography.titleMedium),
-                  if (_isInquiring)
-                    Row(
-                      children: [
-                        SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Memeriksa ID Pelanggan...',
-                          style: AppTypography.bodySmall.copyWith(
-                            color: AppColors.accentEmeraldDark,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
-                    )
-                  else
-                    Text(
-                      'Harga Netto',
-                      style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Grid Nominal Token Listrik
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _plnTokens.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 1.6,
-                ),
-                itemBuilder: (context, index) {
-                  final token = _plnTokens[index];
-                  final isSelected = _selectedToken == token;
-                  final isProcessingThis = _isInquiring && isSelected;
-
-                  return InkWell(
-                    onTap: _isInquiring ? null : () => _onTokenSelected(token),
-                    borderRadius: BorderRadius.circular(14),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: isSelected ? AppColors.accentMint.withValues(alpha: 0.3) : AppColors.surfaceWhite,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: isSelected ? AppColors.accentEmeraldDark : AppColors.borderLight,
-                          width: isSelected ? 2 : 1,
-                        ),
-                        boxShadow: isSelected
-                            ? [
-                                BoxShadow(
-                                  color: AppColors.accentEmeraldDark.withValues(alpha: 0.12),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ]
-                            : null,
-                      ),
-                      child: isProcessingThis
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2.5,
-                                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Inquiry...',
-                                    style: AppTypography.bodySmall.copyWith(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.accentEmeraldDark,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(token['name'], style: AppTypography.titleSmall),
-                                const SizedBox(height: 4),
-                                Text(
-                                  token['priceDisplay'],
-                                  style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
-                                ),
-                              ],
-                            ),
-                    ),
-                  );
-                },
-              ),
-
-              const SizedBox(height: 20),
-
-              // Banner Kasus Error Inquiry (Misal nomor salah / RC 007)
-              if (_tokenInquiryError != null) ...[
+              // VALIDASI: Produk HANYA muncul jika nomor meter sudah 11-12 digit angka!
+              if (!isMeterValid) ...[
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppColors.errorBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 24),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Inquiry Pelanggan Gagal',
-                              style: AppTypography.titleSmall.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.error,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _tokenInquiryError!,
-                              style: AppTypography.bodySmall.copyWith(
-                                color: AppColors.error,
-                                height: 1.3,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
-
-              // Kartu Informasi Pelanggan & Rincian Pembayaran (Muncul saat inquiry berhasil)
-              if (_tokenInquiryResult != null && _selectedToken != null) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceWhite,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.accentEmeraldDark.withValues(alpha: 0.5)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.accentEmeraldDark.withValues(alpha: 0.06),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(Icons.check_circle_rounded, color: AppColors.accentEmeraldDark, size: 20),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Data Pelanggan PLN',
-                                style: AppTypography.titleSmall.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.primaryNavy,
-                                ),
-                              ),
-                            ],
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: AppColors.accentMint,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.verified, size: 12, color: AppColors.accentEmeraldDark),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Terverifikasi',
-                                  style: AppTypography.bodySmall.copyWith(
-                                    color: AppColors.accentEmeraldDark,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Divider(height: 20, color: AppColors.borderLight),
-                      _buildRow('No. Meter / IDPEL', _tokenInquiryResult!['idpel'] ?? '-'),
-                      _buildRow('Nama Pelanggan', _tokenInquiryResult!['name'] ?? '-'),
-                      _buildRow('Tarif / Daya', _tokenInquiryResult!['tarif'] ?? '-'),
-                      const SizedBox(height: 10),
-                      const DashedDivider(color: Color(0xFFCBD5E1), dashWidth: 5, dashSpace: 4),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Rincian Pembayaran',
-                        style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildRow('Nominal Token', _selectedToken!['name']),
-                      _buildRow('Harga Token', CurrencyFormatter.clean(_selectedToken!['priceDisplay'] ?? 'Rp ${_selectedToken!['price']}')),
-                      _buildRow('Biaya Transaksi', 'Gratis (Rp. 0)'),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 60),
-              ] else if (_selectedToken == null && _tokenInquiryError == null) ...[
-                // Petunjuk awal
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+                  padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 20),
                   decoration: BoxDecoration(
                     color: AppColors.surfaceWhite,
                     borderRadius: BorderRadius.circular(16),
@@ -975,25 +878,191 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: AppColors.accentMint.withValues(alpha: 0.3),
+                          color: AppColors.primaryNavy.withValues(alpha: 0.08),
                           shape: BoxShape.circle,
                         ),
-                        child: Icon(Icons.touch_app_rounded, size: 28, color: AppColors.accentEmeraldDark),
+                        child: Icon(Icons.dialpad_rounded, size: 30, color: AppColors.primaryNavy),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       Text(
-                        'Pilih Salah Satu Nominal',
+                        'Masukkan Nomor Meter / IDPEL',
                         style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Ketik No. Meter PLN di atas lalu klik nominal token yang diinginkan untuk memverifikasi data pelanggan dan memproses pembayaran.',
+                        meterText.isEmpty
+                            ? 'Ketik 11-12 digit No. Meter PLN di atas untuk menampilkan daftar pilihan nominal token listrik.'
+                            : 'No. Meter harus 11-12 digit angka.\n(Saat ini baru terisi ${meterText.length} digit)',
                         textAlign: TextAlign.center,
-                        style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, height: 1.4),
+                        style: AppTypography.bodySmall.copyWith(
+                          color: meterText.isEmpty ? AppColors.textSecondary : Colors.orange.shade800,
+                          height: 1.4,
+                        ),
                       ),
                     ],
                   ),
                 ),
+              ] else ...[
+                // NOMOR VALID -> MUNCULKAN PILIHAN PRODUK
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Pilih Nominal Token', style: AppTypography.titleMedium),
+                    if (_isInquiring)
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Memeriksa Akun...',
+                            style: AppTypography.bodySmall.copyWith(
+                              color: AppColors.accentEmeraldDark,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      Text(
+                        'Klik untuk cek akun & bayar',
+                        style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Grid Nominal Token Listrik
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _plnTokens.length,
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 1.6,
+                  ),
+                  itemBuilder: (context, index) {
+                    final token = _plnTokens[index];
+                    final isSelected = _selectedToken == token;
+                    final isProcessingThis = _isInquiring && isSelected;
+
+                    return InkWell(
+                      onTap: _isInquiring ? null : () => _onTokenSelected(token),
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isSelected ? AppColors.accentMint.withValues(alpha: 0.3) : AppColors.surfaceWhite,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isSelected ? AppColors.accentEmeraldDark : AppColors.borderLight,
+                            width: isSelected ? 2 : 1,
+                          ),
+                          boxShadow: isSelected
+                              ? [
+                                  BoxShadow(
+                                    color: AppColors.accentEmeraldDark.withValues(alpha: 0.12),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        child: isProcessingThis
+                            ? Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.5,
+                                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Inquiry...',
+                                      style: AppTypography.bodySmall.copyWith(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.accentEmeraldDark,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(token['name'], style: AppTypography.titleSmall),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    token['priceDisplay'],
+                                    style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    );
+                  },
+                ),
+
+                const SizedBox(height: 20),
+
+                // Error Card jika inquiry gagal
+                if (_tokenInquiryError != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 24),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Inquiry Pelanggan Gagal',
+                                style: AppTypography.titleSmall.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.error,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _tokenInquiryError!,
+                                style: AppTypography.bodySmall.copyWith(
+                                  color: AppColors.error,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
               ],
             ] else ...[
               // ═════════════════════════════════════════════════════════════════

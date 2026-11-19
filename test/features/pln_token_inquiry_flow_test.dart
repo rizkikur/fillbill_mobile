@@ -135,44 +135,53 @@ void main() {
     AppConfig.setMockupEnabled(false);
   });
 
-  group('PLN Token Flow B (Tap Denom to Inquire) Verification', () {
-    testWidgets('Live mode: tapping denom with invalid meter shows error card and prevents payment', (tester) async {
+  group('PLN Token Flow (Validasi Input -> Tampil Produk -> Inq -> Popup Konfirmasi)', () {
+    testWidgets('1. Sebelum nomor 11-12 digit diinput, produk belum muncul', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
             mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(false)),
-            productRepositoryProvider.overrideWithValue(MockFailingProductRepo()),
+            productRepositoryProvider.overrideWithValue(MockSuccessProductRepo()),
           ],
           child: const MaterialApp(
             home: PlnTransactionScreen(initialType: 'token'),
           ),
         ),
       );
-
       await tester.pumpAndSettle();
 
-      // Input 11 digit meter number
-      final textFieldFinder = find.byType(TextField);
-      expect(textFieldFinder, findsOneWidget);
-      await tester.enterText(textFieldFinder, '12000000000');
-      await tester.pumpAndSettle();
-
-      // Tap token chip directly (Flow B: tap denom triggers inq)
-      final tokenChipFinder = find.text('PLN Token Rp 20.000');
-      expect(tokenChipFinder, findsOneWidget);
-      await tester.tap(tokenChipFinder);
-      await tester.pumpAndSettle();
-
-      // Must show error card
-      expect(find.textContaining('Nomor tidak ditemukan'), findsOneWidget);
-      expect(find.text('Inquiry Pelanggan Gagal'), findsOneWidget);
-
-      // Must NOT show verified card or Bayar button
-      expect(find.text('Data Pelanggan PLN'), findsNothing);
-      expect(find.text('Bayar Sekarang'), findsNothing);
+      // Placeholder instruksi harus muncul
+      expect(find.text('Masukkan Nomor Meter / IDPEL'), findsOneWidget);
+      // Grid produk TIDAK boleh muncul
+      expect(find.text('PLN Token Rp 20.000'), findsNothing);
+      expect(find.text('Pilih Nominal Token'), findsNothing);
     });
 
-    testWidgets('Live mode: tapping denom with valid meter executes inquiry, shows customer info and unlocks payment', (tester) async {
+    testWidgets('2. Setelah nomor 11 digit valid diinput, produk muncul', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(false)),
+            productRepositoryProvider.overrideWithValue(MockSuccessProductRepo()),
+          ],
+          child: const MaterialApp(
+            home: PlnTransactionScreen(initialType: 'token'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Input nomor meter 11 digit valid
+      final textFieldFinder = find.byType(TextField);
+      await tester.enterText(textFieldFinder, '12000000001');
+      await tester.pumpAndSettle();
+
+      // Sekarang pilihan produk harus muncul
+      expect(find.text('Pilih Nominal Token'), findsOneWidget);
+      expect(find.text('PLN Token Rp 20.000'), findsOneWidget);
+    });
+
+    testWidgets('3. Klik nominal -> Inq Sukses -> Tampil POPUP (Bottom Sheet) Data Pelanggan & Bayar', (tester) async {
       tester.view.physicalSize = const Size(800, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -189,89 +198,58 @@ void main() {
           ),
         ),
       );
-
       await tester.pumpAndSettle();
 
-      // Input 11 digit valid meter number
+      // Input 11 digit valid
       final textFieldFinder = find.byType(TextField);
       await tester.enterText(textFieldFinder, '12000000001');
       await tester.pumpAndSettle();
 
-      // Tap nominal token directly (Flow B)
+      // Klik token nominal
       final tokenChipFinder = find.text('PLN Token Rp 20.000');
       expect(tokenChipFinder, findsOneWidget);
       await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
-      // Verified customer card should be visible with real subscriber name & tariff
-      expect(find.text('Data Pelanggan PLN'), findsOneWidget);
+      // POPUP Modal Bottom Sheet harus muncul dengan data pelanggan & rincian pembayaran
+      expect(find.text('Konfirmasi Pembelian Token'), findsOneWidget);
+      expect(find.text('DATA PELANGGAN PLN'), findsOneWidget);
       expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
       expect(find.text('R1 / 2200 VA'), findsOneWidget);
-
-      // Checkout bar appears with 'Bayar Sekarang'
+      expect(find.text('RINCIAN PEMBAYARAN'), findsOneWidget);
       expect(find.text('Bayar Sekarang'), findsOneWidget);
     });
 
-    testWidgets('Mockup mode ON: offline network error triggers fallback subscriber card on denom tap', (tester) async {
-      tester.view.physicalSize = const Size(800, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      AppConfig.setMockupEnabled(true);
-
+    testWidgets('4. Nomor tidak terdaftar (RC 007) -> Tampil Error Alert dan TIDAK muncul popup bayar', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(true)),
-            productRepositoryProvider.overrideWithValue(MockNetworkErrorProductRepo()),
+            mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(false)),
+            productRepositoryProvider.overrideWithValue(MockFailingProductRepo()),
           ],
           child: const MaterialApp(
             home: PlnTransactionScreen(initialType: 'token'),
           ),
         ),
       );
-
       await tester.pumpAndSettle();
 
-      // In mockup mode, meter controller is prefilled with 12000000001
-      expect(find.text('Data Pelanggan PLN'), findsOneWidget);
-      expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
-      expect(find.text('Bayar Sekarang'), findsOneWidget);
-    });
-
-    testWidgets('Mockup mode ON: invalid meter 12000000000 is rejected on denom tap even when offline', (tester) async {
-      AppConfig.setMockupEnabled(true);
-
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(true)),
-            productRepositoryProvider.overrideWithValue(MockNetworkErrorProductRepo()),
-          ],
-          child: const MaterialApp(
-            home: PlnTransactionScreen(initialType: 'token'),
-          ),
-        ),
-      );
-
-      await tester.pumpAndSettle();
-
-      // Enter failing meter number
+      // Input 11 digit
       final textFieldFinder = find.byType(TextField);
       await tester.enterText(textFieldFinder, '12000000000');
       await tester.pumpAndSettle();
 
-      // Tap token chip (Flow B)
+      // Klik token nominal
       final tokenChipFinder = find.text('PLN Token Rp 20.000');
-      expect(tokenChipFinder, findsOneWidget);
       await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
-      // Must show error card and NOT allow payment
-      expect(find.textContaining('Nomor tidak ditemukan'), findsOneWidget);
-      expect(find.text('Inquiry Pelanggan Gagal'), findsOneWidget);
-      expect(find.text('Bayar Sekarang'), findsNothing);
+      // Error Alert Dialog harus muncul
+      expect(find.text('Inquiry Gagal'), findsOneWidget);
+      expect(find.textContaining('Nomor tidak ditemukan'), findsWidgets);
+
+      // Popup konfirmasi bayar TIDAK boleh ada
+      expect(find.text('Konfirmasi Pembelian Token'), findsNothing);
     });
   });
 }
