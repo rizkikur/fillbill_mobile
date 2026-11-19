@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/config/mockup_provider.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../core/theme/app_colors.dart';
@@ -189,22 +190,10 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     }
 
     final isMockup = ref.read(mockupModeProvider);
-    if (isMockup) {
-      // Auto Mockup aktif -> langsung buka konfirmasi sheet dengan mockup data
-      _showConfirmationSheet(
-        token: token,
-        meterNo: meterNo,
-        customerName: 'MAHAYANA GARBILEKA',
-        tariffPower: 'R1 / 2200 VA',
-        inquiryId: 999,
-      );
-      return;
-    }
-
-    // Live Prod Mode -> Wajib inquiry ke Backend (BE inq ke supplier M-Link)
     setState(() => _isInquiring = true);
 
     try {
+      // 1. Selalu jalankan inquiry ke Backend (Backend inquiry ke Supplier M-Link)
       final repo = ref.read(productRepositoryProvider);
       final result = await repo.inquireProduct(
         skuCode: token['sku'],
@@ -218,6 +207,7 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       final tariff = result['tariff_power'] as String? ?? 'R1 / 2200 VA';
       final inquiryId = result['id'] as int?;
 
+      // Tampilkan popup konfirmasi dengan nama dan daya asli dari upstream M-Link
       _showConfirmationSheet(
         token: token,
         meterNo: meterNo,
@@ -229,15 +219,62 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
       if (!mounted) return;
       setState(() => _isInquiring = false);
 
-      final msg = e is AppException ? e.message : 'Gagal melakukan inquiry ke biller PLN: $e';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          backgroundColor: AppColors.error,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-      // Popup konfirmasi TIDAK dipanggil bila inquiry gagal!
+      // 2. Jika backend merespon dengan error bisnis (RC 007 nomor tidak ditemukan, 006 gangguan biller, dsb)
+      if (e is AppException && e.statusCode != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        // Popup konfirmasi DIBLOKIR! Tidak ada pembayaran untuk nomor yang ditolak upstream!
+        return;
+      }
+
+      // 3. Jika gagal koneksi (network/offline/server belum jalan):
+      if (isMockup) {
+        // Pada mode mockup simulasi sekalipun, nomor khusus pengujian gagal M-Link WAJIB DITOLAK!
+        if (meterNo == '12000000000') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan'),
+              backgroundColor: AppColors.error,
+              duration: Duration(seconds: 4),
+            ),
+          );
+          return;
+        }
+        if (meterNo == '12000000004') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Inquiry PLN gagal [RC: 006]: Gagal - Gangguan Biller'),
+              backgroundColor: AppColors.error,
+              duration: Duration(seconds: 4),
+            ),
+          );
+          return;
+        }
+
+        // Nomor simulasi sukses
+        _showConfirmationSheet(
+          token: token,
+          meterNo: meterNo,
+          customerName: 'MAHAYANA GARBILEKA',
+          tariffPower: 'R1 / 2200 VA',
+          inquiryId: 999,
+        );
+      } else {
+        // Mode Live: Tampilkan info kegagalan koneksi ke backend
+        final targetUrl = AppConfig.instance.apiBaseUrl;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal menghubungi backend ($targetUrl). Pastikan php artisan serve aktif.'),
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
     }
   }
 
@@ -251,23 +288,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
 
     setState(() => _isInquiring = true);
     final isMockup = ref.read(mockupModeProvider);
-    if (isMockup) {
-      setState(() {
-        _isInquiring = false;
-        _inquiryResult = {
-          'id': 999,
-          'idpel': idpel,
-          'name': 'MAHAYANA GARBILEKA',
-          'tarif': 'R1 / 2200 VA',
-          'periode': 'Nov 2026',
-          'standMeter': '014820 - 015140 (320 kWh)',
-          'tagihan': 'Rp 245.800',
-          'admin': 'Rp 2.500',
-          'total': 'Rp 248.300',
-        };
-      });
-      return;
-    }
 
     try {
       final repo = ref.read(productRepositoryProvider);
@@ -294,13 +314,48 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _isInquiring = false);
-      final msg = e is AppException ? e.message : 'Tagihan tidak ditemukan atau gangguan koneksi.';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(msg),
-          backgroundColor: AppColors.error,
-        ),
-      );
+
+      if (e is AppException && e.statusCode != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: AppColors.error,
+          ),
+        );
+        return;
+      }
+
+      if (isMockup) {
+        if (idpel == '12000000000') {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Inquiry PLN gagal [RC: 007]: Gagal - Nomor tidak ditemukan'),
+              backgroundColor: AppColors.error,
+            ),
+          );
+          return;
+        }
+        setState(() {
+          _inquiryResult = {
+            'id': 999,
+            'idpel': idpel,
+            'name': 'MAHAYANA GARBILEKA',
+            'tarif': 'R1 / 2200 VA',
+            'periode': 'Nov 2026',
+            'standMeter': '014820 - 015140 (320 kWh)',
+            'tagihan': 'Rp 245.800',
+            'admin': 'Rp 2.500',
+            'total': 'Rp 248.300',
+          };
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Tagihan tidak ditemukan atau koneksi ke backend gagal (${AppConfig.instance.apiBaseUrl}).'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
     }
   }
 
@@ -341,6 +396,73 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Switch Banner Mode Pengujian: Live API vs Demo Mockup
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: isMockup ? Colors.purple.shade50 : const Color(0xFFECFDF5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isMockup ? Colors.purple.shade200 : const Color(0xFFA7F3D0),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Icon(
+                          isMockup ? Icons.science_outlined : Icons.cloud_done_rounded,
+                          size: 18,
+                          color: isMockup ? Colors.purple.shade700 : AppColors.accentEmeraldDark,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isMockup ? 'Mode Demo Mockup' : 'Mode Live API (M-Link Biller)',
+                                style: AppTypography.titleSmall.copyWith(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: isMockup ? Colors.purple.shade900 : const Color(0xFF065F46),
+                                ),
+                              ),
+                              Text(
+                                isMockup
+                                    ? 'Simulasi lokal otomatis'
+                                    : 'Inquiry & bayar real-time ke upstream',
+                                style: AppTypography.bodySmall.copyWith(
+                                  fontSize: 10,
+                                  color: isMockup ? Colors.purple.shade700 : const Color(0xFF047857),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Transform.scale(
+                    scale: 0.8,
+                    child: Switch.adaptive(
+                      value: isMockup,
+                      activeThumbColor: Colors.purple.shade600,
+                      activeTrackColor: Colors.purple.shade200,
+                      inactiveThumbColor: AppColors.accentEmeraldDark,
+                      inactiveTrackColor: const Color(0xFFA7F3D0),
+                      onChanged: (val) async {
+                        await ref.read(mockupModeProvider.notifier).setEnabled(val);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
             // Tab Switcher: Token vs Tagihan
             Container(
               decoration: BoxDecoration(

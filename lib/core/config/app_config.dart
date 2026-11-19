@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../security/secure_storage_service.dart';
 
 enum AppEnvironment { dev, staging, prod }
@@ -44,15 +45,21 @@ class AppConfig {
   }
 
   static AppConfig dev() {
+    // Pada Android Emulator, 10.0.2.2 adalah loopback ke host development machine.
+    // Pada Windows Desktop/Web, 127.0.0.1 adalah host localhost.
+    final String defaultHost = (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+        ? 'http://10.0.2.2:8000/api/v1'
+        : 'http://127.0.0.1:8000/api/v1';
+
     return AppConfig(
       environment: AppEnvironment.dev,
-      apiBaseUrl: 'http://127.0.0.1:8000/api/v1',
+      apiBaseUrl: const String.fromEnvironment('API_BASE_URL', defaultValue: '') != ''
+          ? const String.fromEnvironment('API_BASE_URL')
+          : defaultHost,
       connectTimeoutMs: 15000,
       receiveTimeoutMs: 15000,
       enableLogging: true,
       enableMockFallback: false,
-      // Ubah defaultValue di bawah menjadi true jika ingin auto-mockup aktif secara default,
-      // atau gunakan --dart-define=ENABLE_MOCKUP=true saat build
       enableAutoMockup: const bool.fromEnvironment('ENABLE_MOCKUP', defaultValue: false),
     );
   }

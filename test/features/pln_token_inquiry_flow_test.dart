@@ -80,6 +80,36 @@ class MockFailingProductRepo extends ProductRepository {
   }
 }
 
+class MockNetworkErrorProductRepo extends ProductRepository {
+  MockNetworkErrorProductRepo() : super(_DummyRemoteSource());
+
+  @override
+  Future<List<ProductEntity>> getProducts({String? category, String? provider, String? type}) async {
+    return [
+      const ProductEntity(
+        id: 1,
+        skuCode: 'PLN20',
+        name: 'PLN Token Rp 20.000',
+        description: 'Token 20rb',
+        productType: 'prepaid',
+        categoryCode: 'token_listrik',
+        sellPriceCents: 2050000,
+        sellPriceDisplay: 'Rp 20.500',
+        provider: 'PLN',
+        isActive: true,
+      ),
+    ];
+  }
+
+  @override
+  Future<Map<String, dynamic>> inquireProduct({
+    required String skuCode,
+    required String customerNumber,
+  }) async {
+    throw AppException.network();
+  }
+}
+
 class _DummyRemoteSource implements ProductRemoteDataSource {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -173,14 +203,14 @@ void main() {
       expect(find.text('Bayar Sekarang'), findsOneWidget);
     });
 
-    testWidgets('Mockup mode ON: directly shows mockup sheet without network inquiry', (tester) async {
+    testWidgets('Mockup mode ON: offline network error triggers fallback sheet for valid meter', (tester) async {
       AppConfig.setMockupEnabled(true);
 
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
             mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(true)),
-            productRepositoryProvider.overrideWithValue(MockFailingProductRepo()), // Even if repo fails, mockup bypasses it
+            productRepositoryProvider.overrideWithValue(MockNetworkErrorProductRepo()),
           ],
           child: const MaterialApp(
             home: PlnTransactionScreen(initialType: 'token'),
@@ -198,6 +228,38 @@ void main() {
       // Sheet should open directly with mockup name
       expect(find.text('Konfirmasi Pembelian Token PLN'), findsOneWidget);
       expect(find.text('MAHAYANA GARBILEKA'), findsOneWidget);
+    });
+
+    testWidgets('Mockup mode ON: invalid meter 12000000000 is rejected even when offline', (tester) async {
+      AppConfig.setMockupEnabled(true);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            mockupModeProvider.overrideWith((ref) => FixedMockupNotifier(true)),
+            productRepositoryProvider.overrideWithValue(MockNetworkErrorProductRepo()),
+          ],
+          child: const MaterialApp(
+            home: PlnTransactionScreen(initialType: 'token'),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Enter failing meter number
+      final textFieldFinder = find.byType(TextField);
+      await tester.enterText(textFieldFinder, '12000000000');
+      await tester.pumpAndSettle();
+
+      // Tap token chip
+      final tokenChipFinder = find.text('PLN Token Rp 20.000');
+      await tester.tap(tokenChipFinder);
+      await tester.pumpAndSettle();
+
+      // Must show error SnackBar and NOT open confirmation sheet
+      expect(find.textContaining('Nomor tidak ditemukan'), findsOneWidget);
+      expect(find.text('Konfirmasi Pembelian Token PLN'), findsNothing);
     });
   });
 }
