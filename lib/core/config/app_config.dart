@@ -46,10 +46,16 @@ class AppConfig {
 
   static AppConfig dev() {
     // Pada Android Emulator, 10.0.2.2 adalah loopback ke host development machine.
-    // Pada Windows Desktop/Web, 127.0.0.1 adalah host localhost.
-    final String defaultHost = (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
-        ? 'http://10.0.2.2:8000/api/v1'
-        : 'http://127.0.0.1:8000/api/v1';
+    // Pada Web browser, gunakan localhost:8000 agar origin konsisten dengan http://localhost:<port>.
+    // Pada Windows Desktop, 127.0.0.1:8000.
+    final String defaultHost;
+    if (kIsWeb) {
+      defaultHost = 'http://localhost:8000/api/v1';
+    } else if (defaultTargetPlatform == TargetPlatform.android) {
+      defaultHost = 'http://10.0.2.2:8000/api/v1';
+    } else {
+      defaultHost = 'http://127.0.0.1:8000/api/v1';
+    }
 
     return AppConfig(
       environment: AppEnvironment.dev,
