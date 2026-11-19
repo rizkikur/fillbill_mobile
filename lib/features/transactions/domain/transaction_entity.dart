@@ -9,7 +9,8 @@ class TransactionEntity {
   final int sellPriceCents;
   final String sellPriceDisplay;
   final String status; // 'pending', 'processing', 'success', 'failed', 'refunded'
-  final String? providerRef; // Serial Number / Token PLN
+  final String? providerRef; // Referensi supplier (ref_id)
+  final String? serialNumber; // Nomor Seri riil / Token PLN (20 digit)
   final String? failureReason;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -26,12 +27,21 @@ class TransactionEntity {
     required this.sellPriceDisplay,
     required this.status,
     this.providerRef,
+    this.serialNumber,
     this.failureReason,
     this.createdAt,
     this.updatedAt,
   });
 
   String get displayId => referenceNo ?? '#$id';
+
+  /// Serial Number riil / Token PLN untuk dicetak di struk (jika null/kosong, fallback ke providerRef)
+  String get effectiveSerialNumber {
+    if (serialNumber != null && serialNumber!.trim().isNotEmpty && serialNumber != '-') {
+      return serialNumber!.trim();
+    }
+    return providerRef ?? '-';
+  }
 
   factory TransactionEntity.fromJson(Map<String, dynamic> json) {
     String pName = '';
@@ -57,6 +67,7 @@ class TransactionEntity {
       sellPriceDisplay: json['sell_price_display'] as String? ?? '',
       status: (json['status'] as String? ?? 'pending').toLowerCase(),
       providerRef: json['provider_ref'] as String?,
+      serialNumber: json['serial_number'] as String? ?? json['serial_no'] as String? ?? json['token'] as String?,
       failureReason: json['failure_reason'] as String?,
       createdAt: json['created_at'] != null ? DateTime.tryParse(json['created_at'].toString()) : null,
       updatedAt: json['updated_at'] != null ? DateTime.tryParse(json['updated_at'].toString()) : null,
@@ -75,6 +86,7 @@ class TransactionEntity {
     String? sellPriceDisplay,
     String? status,
     String? providerRef,
+    String? serialNumber,
     String? failureReason,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -91,6 +103,7 @@ class TransactionEntity {
       sellPriceDisplay: sellPriceDisplay ?? this.sellPriceDisplay,
       status: status ?? this.status,
       providerRef: providerRef ?? this.providerRef,
+      serialNumber: serialNumber ?? this.serialNumber,
       failureReason: failureReason ?? this.failureReason,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

@@ -183,7 +183,7 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> with SingleTicker
 
   @override
   Widget build(BuildContext context) {
-    final sn = _currentTx.providerRef ?? '-';
+    final sn = _currentTx.effectiveSerialNumber;
     final hasSn = sn.isNotEmpty && sn != '-';
 
     return Scaffold(
@@ -294,6 +294,11 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> with SingleTicker
                       'No. Referensi Transaksi',
                       _currentTx.displayId,
                     ),
+                    if (_currentTx.providerRef != null &&
+                        _currentTx.providerRef!.isNotEmpty &&
+                        _currentTx.providerRef != '-' &&
+                        _currentTx.providerRef != sn)
+                      _buildRow('No. Ref Supplier', _currentTx.providerRef!),
 
                     const SizedBox(height: 18),
                     const DashedDivider(color: Color(0xFFCBD5E1), dashWidth: 5, dashSpace: 4),
@@ -542,9 +547,13 @@ class _ReceiptScreenState extends ConsumerState<ReceiptScreen> with SingleTicker
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: sn));
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Nomor Seri / SN berhasil disalin!'),
-                      duration: Duration(seconds: 2),
+                    SnackBar(
+                      content: Text(
+                        _currentTx.productName.toLowerCase().contains('token')
+                            ? 'Token PLN berhasil disalin!'
+                            : 'Nomor Seri / SN berhasil disalin!',
+                      ),
+                      duration: const Duration(seconds: 2),
                     ),
                   );
                 },

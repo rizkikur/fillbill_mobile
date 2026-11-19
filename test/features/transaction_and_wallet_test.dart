@@ -29,6 +29,23 @@ void main() {
       expect(tx.customerNumber, '081234567890');
     });
 
+    test('TransactionEntity prioritizes serial_number over provider_ref in effectiveSerialNumber', () {
+      final json = {
+        'id': 102,
+        'product_name': 'PLN Token Rp 20.000',
+        'customer_number': '12000000001',
+        'sell_price_display': 'Rp 20.500',
+        'status': 'success',
+        'provider_ref': 'REF-MLINK-99120',
+        'serial_number': '3797-4760-0161-1083-4669',
+      };
+
+      final tx = TransactionEntity.fromJson(json);
+      expect(tx.providerRef, 'REF-MLINK-99120');
+      expect(tx.serialNumber, '3797-4760-0161-1083-4669');
+      expect(tx.effectiveSerialNumber, '3797-4760-0161-1083-4669');
+    });
+
     test('InquiryEntity serialization', () {
       final json = {
         'id': 99,
