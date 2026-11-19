@@ -108,19 +108,35 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     super.dispose();
   }
 
-  Future<void> _inquireTokenCustomer(String meterNo) async {
+  /// Alur B: Saat nominal token di-klik, langsung lakukan inquiry ke BE & tampilkan info pelanggan + total
+  Future<void> _onTokenSelected(Map<String, dynamic> token) async {
+    final meterNo = _meterController.text.trim();
     if (meterNo.length < 11) {
+      setState(() {
+        _selectedToken = token;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Harap masukkan 11-12 digit No. Meter / ID Pelanggan')),
+        const SnackBar(
+          content: Text('Ketik 11-12 digit No. Meter / ID Pelanggan terlebih dahulu'),
+          duration: Duration(seconds: 2),
+        ),
       );
       return;
     }
 
     setState(() {
-      _isInquiring = true;
+      _selectedToken = token;
       _tokenInquiryError = null;
+    });
+
+    // Jika nomor meter sudah berhasil di-inquiry sebelumnya, cukup update denom yang dipilih
+    if (_tokenInquiryResult != null && _tokenInquiryResult!['idpel'] == meterNo) {
+      return;
+    }
+
+    setState(() {
+      _isInquiring = true;
       _tokenInquiryResult = null;
-      _selectedToken = null;
     });
 
     final isMockup = ref.read(mockupModeProvider);
@@ -128,7 +144,7 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
     try {
       final repo = ref.read(productRepositoryProvider);
       final result = await repo.inquireProduct(
-        skuCode: 'PLN20',
+        skuCode: token['sku'],
         customerNumber: meterNo,
       );
 
@@ -389,7 +405,6 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
 
     final isMockup = ref.watch(mockupModeProvider);
     final meterText = _meterController.text.trim();
-    final canInquire = meterText.length >= 11;
 
     return Scaffold(
       backgroundColor: AppColors.bgLight,
@@ -664,11 +679,10 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                     prefix: const Icon(Icons.pin, color: AppColors.textSecondary),
                     onChanged: (val) {
                       setState(() {
-                        // Reset inquiry state saat input berubah
+                        // Reset inquiry state saat input nomor meter diubah
                         if (_tokenInquiryResult != null || _tokenInquiryError != null) {
                           _tokenInquiryResult = null;
                           _tokenInquiryError = null;
-                          _selectedToken = null;
                         }
                         if (_postpaidInquiryResult != null || _postpaidInquiryError != null) {
                           _postpaidInquiryResult = null;
@@ -683,27 +697,12 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                             onPressed: () {
                               setState(() {
                                 _meterController.text = '12000000001';
+                                _tokenInquiryResult = null;
+                                _tokenInquiryError = null;
                               });
-                              _inquireTokenCustomer('12000000001');
+                              _onTokenSelected(_plnTokens.first);
                             },
                           )
-                        : null,
-                  ),
-                  const SizedBox(height: 12),
-                  // Tombol Cek ID Pelanggan
-                  CustomButton(
-                    text: _activeType == 'token' ? 'Cek ID Pelanggan' : 'Cek Tagihan Listrik',
-                    isLoading: _isInquiring,
-                    backgroundColor: canInquire ? AppColors.primaryNavy : AppColors.borderLight,
-                    textColor: canInquire ? Colors.white : AppColors.textSecondary,
-                    onPressed: canInquire
-                        ? () {
-                            if (_activeType == 'token') {
-                              _inquireTokenCustomer(meterText);
-                            } else {
-                              _inquirePostpaidBill(meterText);
-                            }
-                          }
                         : null,
                   ),
                   if (isMockup) ...[
@@ -720,10 +719,127 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
             const SizedBox(height: 20),
 
             // ═══════════════════════════════════════════════════════════════════
-            // BAGIAN TOKEN LISTRIK (PRABAYAR)
+            // BAGIAN TOKEN LISTRIK (PRABAYAR) - ALUR B: KLIK DENOM LANGSUNG INQ
             // ═══════════════════════════════════════════════════════════════════
             if (_activeType == 'token') ...[
-              // Kasus 1: Error Inquiry
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Pilih Nominal Token', style: AppTypography.titleMedium),
+                  if (_isInquiring)
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Memeriksa ID Pelanggan...',
+                          style: AppTypography.bodySmall.copyWith(
+                            color: AppColors.accentEmeraldDark,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Text(
+                      'Harga Netto',
+                      style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Grid Nominal Token Listrik
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _plnTokens.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: 1.6,
+                ),
+                itemBuilder: (context, index) {
+                  final token = _plnTokens[index];
+                  final isSelected = _selectedToken == token;
+                  final isProcessingThis = _isInquiring && isSelected;
+
+                  return InkWell(
+                    onTap: _isInquiring ? null : () => _onTokenSelected(token),
+                    borderRadius: BorderRadius.circular(14),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isSelected ? AppColors.accentMint.withValues(alpha: 0.3) : AppColors.surfaceWhite,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isSelected ? AppColors.accentEmeraldDark : AppColors.borderLight,
+                          width: isSelected ? 2 : 1,
+                        ),
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                  color: AppColors.accentEmeraldDark.withValues(alpha: 0.12),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: isProcessingThis
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentEmeraldDark),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Inquiry...',
+                                    style: AppTypography.bodySmall.copyWith(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.accentEmeraldDark,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(token['name'], style: AppTypography.titleSmall),
+                                const SizedBox(height: 4),
+                                Text(
+                                  token['priceDisplay'],
+                                  style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
+                                ),
+                              ],
+                            ),
+                    ),
+                  );
+                },
+              ),
+
+              const SizedBox(height: 20),
+
+              // Banner Kasus Error Inquiry (Misal nomor salah / RC 007)
               if (_tokenInquiryError != null) ...[
                 Container(
                   width: double.infinity,
@@ -766,8 +882,8 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                 const SizedBox(height: 20),
               ],
 
-              // Kasus 2: Berhasil Inquiry -> Tampilkan Kartu Pelanggan Terverifikasi
-              if (_tokenInquiryResult != null) ...[
+              // Kartu Informasi Pelanggan & Rincian Pembayaran (Muncul saat inquiry berhasil)
+              if (_tokenInquiryResult != null && _selectedToken != null) ...[
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(18),
@@ -829,84 +945,26 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                       _buildRow('No. Meter / IDPEL', _tokenInquiryResult!['idpel'] ?? '-'),
                       _buildRow('Nama Pelanggan', _tokenInquiryResult!['name'] ?? '-'),
                       _buildRow('Tarif / Daya', _tokenInquiryResult!['tarif'] ?? '-'),
+                      const SizedBox(height: 10),
+                      const DashedDivider(color: Color(0xFFCBD5E1), dashWidth: 5, dashSpace: 4),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Rincian Pembayaran',
+                        style: AppTypography.titleSmall.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildRow('Nominal Token', _selectedToken!['name']),
+                      _buildRow('Harga Token', CurrencyFormatter.clean(_selectedToken!['priceDisplay'] ?? 'Rp ${_selectedToken!['price']}')),
+                      _buildRow('Biaya Transaksi', 'Gratis (Rp. 0)'),
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
-
-                // Grid Nominal Token Listrik (Aktif setelah nomor meter terverifikasi)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Pilih Nominal Token', style: AppTypography.titleMedium),
-                    Text(
-                      'Harga Netto',
-                      style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _plnTokens.length,
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 1.6,
-                  ),
-                  itemBuilder: (context, index) {
-                    final token = _plnTokens[index];
-                    final isSelected = _selectedToken == token;
-                    return InkWell(
-                      onTap: () {
-                        setState(() {
-                          _selectedToken = token;
-                        });
-                      },
-                      borderRadius: BorderRadius.circular(14),
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: isSelected ? AppColors.accentMint.withValues(alpha: 0.3) : AppColors.surfaceWhite,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: isSelected ? AppColors.accentEmeraldDark : AppColors.borderLight,
-                            width: isSelected ? 2 : 1,
-                          ),
-                          boxShadow: isSelected
-                              ? [
-                                  BoxShadow(
-                                    color: AppColors.accentEmeraldDark.withValues(alpha: 0.12),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(token['name'], style: AppTypography.titleSmall),
-                            const SizedBox(height: 4),
-                            Text(
-                              token['priceDisplay'],
-                              style: AppTypography.titleMedium.copyWith(color: AppColors.accentEmeraldDark),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
                 const SizedBox(height: 60),
-              ] else if (_tokenInquiryError == null) ...[
-                // Placeholder bersih saat belum dilakukan inquiry
+              ] else if (_selectedToken == null && _tokenInquiryError == null) ...[
+                // Petunjuk awal
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
                   decoration: BoxDecoration(
                     color: AppColors.surfaceWhite,
                     borderRadius: BorderRadius.circular(16),
@@ -915,21 +973,21 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
                   child: Column(
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
                           color: AppColors.accentMint.withValues(alpha: 0.3),
                           shape: BoxShape.circle,
                         ),
-                        child: Icon(Icons.bolt, size: 36, color: AppColors.accentEmeraldDark),
+                        child: Icon(Icons.touch_app_rounded, size: 28, color: AppColors.accentEmeraldDark),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                       Text(
-                        'Masukkan & Periksa Nomor Meter',
+                        'Pilih Salah Satu Nominal',
                         style: AppTypography.titleMedium.copyWith(fontWeight: FontWeight.w700),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Text(
-                        'Ketik 11-12 digit No. Meter atau ID Pelanggan Anda di atas, lalu klik "Cek ID Pelanggan" untuk memverifikasi data dan memilih nominal token listrik.',
+                        'Ketik No. Meter PLN di atas lalu klik nominal token yang diinginkan untuk memverifikasi data pelanggan dan memproses pembayaran.',
                         textAlign: TextAlign.center,
                         style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary, height: 1.4),
                       ),
@@ -941,6 +999,16 @@ class _PlnTransactionScreenState extends ConsumerState<PlnTransactionScreen> {
               // ═════════════════════════════════════════════════════════════════
               // BAGIAN TAGIHAN LISTRIK (PASCABAYAR)
               // ═════════════════════════════════════════════════════════════════
+              CustomButton(
+                text: 'Cek Tagihan Listrik',
+                isLoading: _isInquiring,
+                backgroundColor: meterText.length >= 8 ? AppColors.primaryNavy : AppColors.borderLight,
+                textColor: meterText.length >= 8 ? Colors.white : AppColors.textSecondary,
+                onPressed: meterText.length >= 8 ? () => _inquirePostpaidBill(meterText) : null,
+              ),
+
+              const SizedBox(height: 20),
+
               if (_postpaidInquiryError != null) ...[
                 Container(
                   width: double.infinity,

@@ -135,8 +135,8 @@ void main() {
     AppConfig.setMockupEnabled(false);
   });
 
-  group('PLN Token Inquiry Flow Verification', () {
-    testWidgets('Live mode: failed inquiry shows prominent error card and prevents payment', (tester) async {
+  group('PLN Token Flow B (Tap Denom to Inquire) Verification', () {
+    testWidgets('Live mode: tapping denom with invalid meter shows error card and prevents payment', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -157,10 +157,10 @@ void main() {
       await tester.enterText(textFieldFinder, '12000000000');
       await tester.pumpAndSettle();
 
-      // Tap 'Cek ID Pelanggan'
-      final checkBtn = find.text('Cek ID Pelanggan');
-      expect(checkBtn, findsOneWidget);
-      await tester.tap(checkBtn);
+      // Tap token chip directly (Flow B: tap denom triggers inq)
+      final tokenChipFinder = find.text('PLN Token Rp 20.000');
+      expect(tokenChipFinder, findsOneWidget);
+      await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
       // Must show error card
@@ -172,7 +172,7 @@ void main() {
       expect(find.text('Bayar Sekarang'), findsNothing);
     });
 
-    testWidgets('Live mode: successful inquiry retrieves real subscriber name and unlocks nominal tokens', (tester) async {
+    testWidgets('Live mode: tapping denom with valid meter executes inquiry, shows customer info and unlocks payment', (tester) async {
       tester.view.physicalSize = const Size(800, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -197,9 +197,10 @@ void main() {
       await tester.enterText(textFieldFinder, '12000000001');
       await tester.pumpAndSettle();
 
-      // Tap 'Cek ID Pelanggan'
-      final checkBtn = find.text('Cek ID Pelanggan');
-      await tester.tap(checkBtn);
+      // Tap nominal token directly (Flow B)
+      final tokenChipFinder = find.text('PLN Token Rp 20.000');
+      expect(tokenChipFinder, findsOneWidget);
+      await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
       // Verified customer card should be visible with real subscriber name & tariff
@@ -207,17 +208,11 @@ void main() {
       expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
       expect(find.text('R1 / 2200 VA'), findsOneWidget);
 
-      // Nominal tokens are unlocked
-      final tokenChipFinder = find.text('PLN Token Rp 20.000');
-      expect(tokenChipFinder, findsOneWidget);
-      await tester.tap(tokenChipFinder);
-      await tester.pumpAndSettle();
-
       // Checkout bar appears with 'Bayar Sekarang'
       expect(find.text('Bayar Sekarang'), findsOneWidget);
     });
 
-    testWidgets('Mockup mode ON: offline network error triggers fallback subscriber card for valid meter', (tester) async {
+    testWidgets('Mockup mode ON: offline network error triggers fallback subscriber card on denom tap', (tester) async {
       tester.view.physicalSize = const Size(800, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -239,20 +234,13 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // In mockup mode, meter controller is prefilled with 12000000001 and pre-inquired
+      // In mockup mode, meter controller is prefilled with 12000000001
       expect(find.text('Data Pelanggan PLN'), findsOneWidget);
       expect(find.text('MAHAYANA GARBILEKA 01'), findsOneWidget);
-
-      // Tap nominal
-      final tokenChipFinder = find.text('PLN Token Rp 20.000');
-      expect(tokenChipFinder, findsOneWidget);
-      await tester.tap(tokenChipFinder);
-      await tester.pumpAndSettle();
-
       expect(find.text('Bayar Sekarang'), findsOneWidget);
     });
 
-    testWidgets('Mockup mode ON: invalid meter 12000000000 is rejected even when offline', (tester) async {
+    testWidgets('Mockup mode ON: invalid meter 12000000000 is rejected on denom tap even when offline', (tester) async {
       AppConfig.setMockupEnabled(true);
 
       await tester.pumpWidget(
@@ -274,9 +262,10 @@ void main() {
       await tester.enterText(textFieldFinder, '12000000000');
       await tester.pumpAndSettle();
 
-      // Tap 'Cek ID Pelanggan'
-      final checkBtn = find.text('Cek ID Pelanggan');
-      await tester.tap(checkBtn);
+      // Tap token chip (Flow B)
+      final tokenChipFinder = find.text('PLN Token Rp 20.000');
+      expect(tokenChipFinder, findsOneWidget);
+      await tester.tap(tokenChipFinder);
       await tester.pumpAndSettle();
 
       // Must show error card and NOT allow payment
